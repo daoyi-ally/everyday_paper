@@ -406,13 +406,43 @@ def normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
 
 
-def fallback_intro(repo: Repo, section: str) -> str:
-    topic_names = [topic_display(topic) for topic in repo.topics[:4] if topic]
-    topic_text = "\u3001".join(topic_names) if topic_names else (repo.language if repo.language and repo.language != "Unknown" else "\u901a\u7528\u5f00\u53d1")
-    description = truncate(repo.description, 86)
+def infer_repo_purpose(repo: Repo, section: str) -> str:
+    text = f"{repo.full_name} {repo.description} {' '.join(repo.topics)} {repo.language}".lower()
+    rules = [
+        (("penetration testing", "vulnerabilities"), "用于发现和修复应用安全风险的 AI 渗透测试工具"),
+        (("meeting assistant", "transcription"), "用于会议转写、说话人区分和内容总结的本地 AI 会议助手"),
+        (("job application", "cover letters", "cvs"), "用于求职投递、简历定制和面试准备的 AI 求职自动化框架"),
+        (("system prompts", "prompt leaks"), "用于整理和收集主流 AI 产品系统提示词的资料仓库"),
+        (("system prompts", "extracted"), "用于整理和收集主流 AI 产品系统提示词的资料仓库"),
+        (("design system", "agent ready"), "用于构建可定制界面组件和设计规范的开源设计系统"),
+        (("gateway", "providers"), "用于统一接入多个 AI 模型提供商的聚合网关"),
+        (("multiplexer", "terminal"), "用于在终端里统一调度或切换多个智能体的工具"),
+        (("gui agent", "web interfaces"), "用于通过自然语言控制网页界面的页面智能体"),
+        (("browser", "automation"), "用于浏览器自动化或网页操作的工具"),
+        (("agent",), "用于自动执行任务或辅助操作的智能体项目"),
+        (("assistant",), "用于辅助用户完成特定任务的助手型项目"),
+        (("design system",), "用于搭建设计系统和复用界面组件的项目"),
+        (("sdk",), "用于集成某类能力或服务的软件开发工具包"),
+        (("framework",), "用于搭建应用或工作流的开发框架"),
+        (("cli", "terminal"), "用于命令行或终端场景的效率工具"),
+    ]
+    for keywords, purpose in rules:
+        if all(keyword in text for keyword in keywords):
+            return purpose
+    description = truncate(repo.description, 88)
+    if description and description != "暂无简介":
+        return f"从公开简介看，这是一个主要用于以下场景的项目：{description}"
     if section == "innovation":
-        return f"\u8fd9\u662f\u4e00\u4e2a\u56f4\u7ed5 {topic_text} \u7684\u5f00\u6e90\u9879\u76ee\uff0c\u4e3b\u8981\u4f7f\u7528 {repo.language}\uff1b\u4ece\u4ed3\u5e93\u516c\u5f00\u7b80\u4ecb\u770b\uff0c\u5b83\u91cd\u70b9\u805a\u7126\u4e8e\uff1a{description}"
-    return f"\u8fd9\u662f\u4e00\u4e2a\u504f\u5411 {topic_text} \u7684\u6709\u8da3\u9879\u76ee\uff0c\u4e3b\u8981\u4f7f\u7528 {repo.language}\uff1b\u4ece\u4ed3\u5e93\u516c\u5f00\u7b80\u4ecb\u770b\uff0c\u5b83\u4e3b\u6253\uff1a{description}"
+        return "这是一个近期热度较高、值得进一步查看 README 和示例的技术类项目"
+    return "这是一个近期讨论度较高、适合快速体验和获取灵感的开源项目"
+
+
+
+def fallback_intro(repo: Repo, section: str) -> str:
+    purpose = infer_repo_purpose(repo, section)
+    if repo.period_stars:
+        return f"这个项目是做什么的：{purpose}。它最近上升较快，本期约新增 {repo.period_stars:,} Stars，适合优先了解其使用场景和实际效果。"
+    return f"这个项目是做什么的：{purpose}。如果你想快速判断值不值得看，可以先从 README、示例和最近更新入手。"
 
 
 def repo_intro(repo: Repo, section: str, repo_insights: dict[str, RepoInsight] | None = None) -> str:
@@ -483,18 +513,20 @@ def build_kimi_repo_prompt(repos: list[Repo], repo_sections: dict[str, str]) -> 
         1. Return exactly one JSON object with the top-level shape {{"repos": [...]}}.
         2. Each item in repos must contain full_name, intro_zh, and reason_zh.
         3. Keep full_name exactly the same as the input and cover every repository.
-        4. intro_zh must be 1-2 sentences in Simplified Chinese, about 40-90 Chinese characters, first saying what the repo does and then why it is worth following.
-        5. reason_zh must be 1 sentence in Simplified Chinese, about 25-60 Chinese characters, highlighting the near-term reason to pay attention.
-        6. Do not invent README details, benchmarks, customer stories, author background, or unsupported technical claims.
-        7. No Markdown. No extra explanation. JSON object only.
+        4. intro_zh must be 1-2 sentences in Simplified Chinese, about 40-90 Chinese characters.
+        5. The FIRST sentence of intro_zh must directly explain what the project does in plain Chinese, such as "用于整理系统提示词的资料仓库" or "用于会议转写和总结的本地助手".
+        6. Do NOT start intro_zh with language, tech stack, topics, or vague category labels like "一个 AI 项目" or "基于 TypeScript".
+        7. reason_zh must be 1 sentence in Simplified Chinese, about 25-60 Chinese characters, highlighting the near-term reason to pay attention.
+        8. Do not invent README details, benchmarks, customer stories, author background, or unsupported technical claims.
+        9. No Markdown. No extra explanation. JSON object only.
 
         Example output:
         {{
           "repos": [
             {{
               "full_name": "owner/repo",
-              "intro_zh": "\u8fd9\u662f\u4e00\u4e2a\u9762\u5411\u5f00\u53d1\u8005\u7684\u5de5\u5177\uff0c\u9002\u5408\u5173\u6ce8\u5176\u5b9e\u73b0\u601d\u8def\u3002",
-              "reason_zh": "\u8fd1\u671f\u70ed\u5ea6\u4e0a\u5347\uff0c\u9002\u5408\u5feb\u901f\u8ddf\u8fdb\u5176\u65b9\u5411\u4e0e\u5b9e\u73b0\u3002"
+              "intro_zh": "这个项目用于统一接入多个模型提供商，帮助开发者用一个接口切换不同 AI 服务。近期热度上升较快，适合先看它的接入方式和使用门槛。",
+              "reason_zh": "近 7 天关注度明显上升，值得看看它是否能减少多模型接入成本。"
             }}
           ]
         }}
@@ -519,7 +551,7 @@ def generate_repo_insights(repos: list[Repo], repo_sections: dict[str, str]) -> 
         "messages": [
             {
                 "role": "system",
-                "content": "You are a concise Chinese tech newsletter editor. Only use the provided repository metadata. Return one valid JSON object and nothing else.",
+                "content": "You are a concise Chinese tech newsletter editor. Only use the provided repository metadata. The first sentence must explain what the project does in plain Chinese, not its tech stack. Return one valid JSON object and nothing else.",
             },
             {"role": "user", "content": prompt},
         ],
@@ -606,30 +638,41 @@ def section_meta(section: str) -> dict[str, str]:
     }
 
 
+def purpose_focus(repo: Repo, section: str) -> str:
+    purpose = infer_repo_purpose(repo, section)
+    match = re.match(r"^用于(.+?)的(?:项目|工具|框架|资料仓库|系统|助手|SDK|开发工具包)$", purpose)
+    if match:
+        return match.group(1)
+    return purpose
+
+
+
 def repo_reason(repo: Repo, section: str) -> str:
-    topics = [topic_display(t) for t in repo.topics[:5]]
-    topic_text = "\u3001".join(topics) if topics else repo.language
-    trend_text = f"\uff0cTrending \u5468\u671f\u5185\u65b0\u589e\u7ea6 {repo.period_stars:,} \u661f" if repo.period_stars else ""
+    focus = purpose_focus(repo, section)
+    trend_text = f"近 7 天内新增约 {repo.period_stars:,} Stars，" if repo.period_stars else ""
     if section == "innovation":
-        return f"\u8fd1\u671f\u70ed\u5ea6\u8f83\u9ad8{trend_text}\uff0c\u65b9\u5411\u8986\u76d6 {topic_text}\uff0c\u503c\u5f97\u5173\u6ce8\u5176\u6280\u672f\u5b9e\u73b0\u3001\u843d\u5730\u8def\u5f84\u4e0e\u5e94\u7528\u6f5c\u529b\u3002"
-    return f"\u793e\u533a\u8ba8\u8bba\u5ea6\u8f83\u9ad8{trend_text}\uff0c\u4e3b\u9898\u504f {topic_text}\uff0c\u517c\u5177\u7075\u611f\u4ef7\u503c\u3001\u53ef\u73a9\u6027\u6216\u5b9e\u7528\u6027\u3002"
+        return f"{trend_text}说明「{focus}」这类需求关注度正在上升，值得查看它解决问题的方式和落地效果。"
+    return f"{trend_text}它在「{focus}」方向讨论度较高，适合快速体验它的用法、交互方式或实用价值。"
+
 
 
 def repo_observations(repo: Repo, section: str) -> list[str]:
     observations: list[str] = []
     if repo.period_stars:
-        observations.append(f"Trending \u5468\u671f\u5185\u65b0\u589e\u7ea6 {repo.period_stars:,} Stars\uff0c\u77ed\u671f\u5173\u6ce8\u5ea6\u660e\u663e\u3002")
-    if repo.language and repo.language != "Unknown":
-        observations.append(f"\u4e3b\u8981\u6280\u672f\u6808\u4e3a {repo.language}\uff0c\u53ef\u4ee5\u5feb\u901f\u5224\u65ad\u662f\u5426\u4fbf\u4e8e\u4e0a\u624b\u6216\u4e8c\u6b21\u5f00\u53d1\u3002")
+        observations.append(f"Trending 周期内新增约 {repo.period_stars:,} Stars，短期关注度明显。")
+    focus = purpose_focus(repo, section)
+    observations.append(f"核心场景是「{focus}」，可以先对照 README 和 Demo 看它是否符合你的使用需求。")
     if repo.topics:
-        labels = "\u3001".join(topic_display(t) for t in repo.topics[:4])
-        observations.append(f"\u5173\u952e\u8bcd\u96c6\u4e2d\u5728 {labels}\uff0c\u9879\u76ee\u5b9a\u4f4d\u6bd4\u8f83\u6e05\u6670\u3002")
+        labels = "、".join(topic_display(t) for t in repo.topics[:4])
+        observations.append(f"关键词包括 {labels}，能帮你快速判断它更偏向哪类人群或场景。")
+    if repo.language and repo.language != "Unknown":
+        observations.append(f"主要使用 {repo.language}，如果你打算试用或二次开发，可以提前评估上手成本。")
     if repo.pushed_at or repo.updated_at:
-        observations.append(f"\u6700\u8fd1\u66f4\u65b0\u4e3a {format_date(repo.pushed_at or repo.updated_at)}\uff0c\u4f9b\u540e\u7eed\u8bc4\u4f30\u9879\u76ee\u6d3b\u8dc3\u5ea6\u3002")
+        observations.append(f"最近更新为 {format_date(repo.pushed_at or repo.updated_at)}，可作为判断项目活跃度的参考。")
     if section == "innovation" and len(observations) < 4:
-        observations.append("\u5efa\u8bae\u91cd\u70b9\u67e5\u770b README\u3001\u67b6\u6784\u8bf4\u660e\u3001\u793a\u4f8b\u5de5\u7a0b\u548c\u90e8\u7f72\u65b9\u5f0f\u3002")
+        observations.append("建议重点查看 README、架构说明、示例工程和部署方式。")
     if section == "fun" and len(observations) < 4:
-        observations.append("\u9002\u5408\u4ece\u4ea4\u4e92\u8bbe\u8ba1\u3001\u521b\u610f\u8868\u8fbe\u6216\u4e2a\u4eba\u6548\u7387\u89d2\u5ea6\u5feb\u901f\u4f53\u9a8c\u3002")
+        observations.append("适合从交互设计、创意表达或个人效率角度快速体验。")
     return observations[:4]
 
 
