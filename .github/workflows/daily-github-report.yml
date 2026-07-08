@@ -1,0 +1,39 @@
+﻿name: Daily GitHub Hot Projects Report
+
+on:
+  schedule:
+    # 01:00 UTC = 09:00 Asia/Shanghai / Beijing time
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  send-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Optional custom PAT. If not set, the script can use GitHub's automatic token below.
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      SMTP_USE_SSL: true
+      SMTP_STARTTLS: false
+      MAIL_FROM: ${{ secrets.MAIL_FROM }}
+      MAIL_TO: 3087130357@qq.com
+      REPORT_DAYS: 7
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Generate and send report
+        run: python scripts/daily_github_report.py
