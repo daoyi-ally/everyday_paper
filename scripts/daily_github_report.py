@@ -362,7 +362,7 @@ def truncate(value: str, length: int = 180) -> str:
 
 def format_date(value: str) -> str:
     if not value:
-        return "??"
+        return "\u672a\u77e5"
     try:
         return parse_github_time(value).strftime("%Y-%m-%d")
     except ValueError:
@@ -387,21 +387,21 @@ def top_languages(repos: Iterable[Repo], limit: int = 3) -> str:
             continue
         counts[language] = counts.get(language, 0) + 1
     if not counts:
-        return "???????"
+        return "\u8bed\u8a00\u5206\u5e03\u8f83\u5206\u6563"
     top = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
-    return "?".join(f"{name}({count})" for name, count in top)
+    return "\u3001".join(f"{name}({count})" for name, count in top)
 
 
 def section_meta(section: str) -> dict[str, str]:
     if section == "innovation":
         return {
-            "label": "????",
+            "label": "\u6280\u672f\u521b\u65b0",
             "accent": "#0969da",
             "soft": "#ddf4ff",
             "border": "#b6e3ff",
         }
     return {
-        "label": "????",
+        "label": "\u6709\u8da3\u9879\u76ee",
         "accent": "#8250df",
         "soft": "#fbefff",
         "border": "#e9d8fd",
@@ -410,28 +410,28 @@ def section_meta(section: str) -> dict[str, str]:
 
 def repo_reason(repo: Repo, section: str) -> str:
     topics = [topic_display(t) for t in repo.topics[:5]]
-    topic_text = "?".join(topics) if topics else repo.language
-    trend_text = f"??? Trending ??? {repo.period_stars:,} ?" if repo.period_stars else ""
+    topic_text = "\u3001".join(topics) if topics else repo.language
+    trend_text = f"\uff0cTrending \u5468\u671f\u5185\u65b0\u589e\u7ea6 {repo.period_stars:,} \u661f" if repo.period_stars else ""
     if section == "innovation":
-        return f"??????{trend_text}????? {topic_text}???????????????????????"
-    return f"???????{trend_text}???? {topic_text}????????????????"
+        return f"\u8fd1\u671f\u70ed\u5ea6\u8f83\u9ad8{trend_text}\uff0c\u65b9\u5411\u8986\u76d6 {topic_text}\uff0c\u503c\u5f97\u5173\u6ce8\u5176\u6280\u672f\u5b9e\u73b0\u3001\u843d\u5730\u8def\u5f84\u4e0e\u5e94\u7528\u6f5c\u529b\u3002"
+    return f"\u793e\u533a\u8ba8\u8bba\u5ea6\u8f83\u9ad8{trend_text}\uff0c\u4e3b\u9898\u504f {topic_text}\uff0c\u517c\u5177\u7075\u611f\u4ef7\u503c\u3001\u53ef\u73a9\u6027\u6216\u5b9e\u7528\u6027\u3002"
 
 
 def repo_observations(repo: Repo, section: str) -> list[str]:
     observations: list[str] = []
     if repo.period_stars:
-        observations.append(f"Trending ?????? {repo.period_stars:,} Stars?????????")
+        observations.append(f"Trending \u5468\u671f\u5185\u65b0\u589e\u7ea6 {repo.period_stars:,} Stars\uff0c\u77ed\u671f\u5173\u6ce8\u5ea6\u660e\u663e\u3002")
     if repo.language and repo.language != "Unknown":
-        observations.append(f"?????? {repo.language}????????????????")
+        observations.append(f"\u4e3b\u8981\u6280\u672f\u6808\u4e3a {repo.language}\uff0c\u53ef\u4ee5\u5feb\u901f\u5224\u65ad\u662f\u5426\u4fbf\u4e8e\u4e0a\u624b\u6216\u4e8c\u6b21\u5f00\u53d1\u3002")
     if repo.topics:
-        labels = "?".join(topic_display(t) for t in repo.topics[:4])
-        observations.append(f"?????? {labels}????????")
+        labels = "\u3001".join(topic_display(t) for t in repo.topics[:4])
+        observations.append(f"\u5173\u952e\u8bcd\u96c6\u4e2d\u5728 {labels}\uff0c\u9879\u76ee\u5b9a\u4f4d\u6bd4\u8f83\u6e05\u6670\u3002")
     if repo.pushed_at or repo.updated_at:
-        observations.append(f"??????? {format_date(repo.pushed_at or repo.updated_at)}????????????")
+        observations.append(f"\u6700\u8fd1\u66f4\u65b0\u4e3a {format_date(repo.pushed_at or repo.updated_at)}\uff0c\u4f9b\u540e\u7eed\u8bc4\u4f30\u9879\u76ee\u6d3b\u8dc3\u5ea6\u3002")
     if section == "innovation" and len(observations) < 4:
-        observations.append("????? README????????????????")
+        observations.append("\u5efa\u8bae\u91cd\u70b9\u67e5\u770b README\u3001\u67b6\u6784\u8bf4\u660e\u3001\u793a\u4f8b\u5de5\u7a0b\u548c\u90e8\u7f72\u65b9\u5f0f\u3002")
     if section == "fun" and len(observations) < 4:
-        observations.append("??????????????????????????")
+        observations.append("\u9002\u5408\u4ece\u4ea4\u4e92\u8bbe\u8ba1\u3001\u521b\u610f\u8868\u8fbe\u6216\u4e2a\u4eba\u6548\u7387\u89d2\u5ea6\u5feb\u901f\u4f53\u9a8c\u3002")
     return observations[:4]
 
 
@@ -472,19 +472,19 @@ def select_reports(innovation: list[Repo], fun: list[Repo]) -> tuple[list[Repo],
 
 
 def plain_repo_block(index: int, repo: Repo, section: str) -> str:
-    topics = ", ".join(topic_display(t) for t in repo.topics[:8]) if repo.topics else "?"
-    period = f" | ???? Stars: {repo.period_stars:,}" if repo.period_stars else ""
+    topics = ", ".join(topic_display(t) for t in repo.topics[:8]) if repo.topics else "\u65e0"
+    period = f" | \u672c\u671f\u65b0\u589e Stars: {repo.period_stars:,}" if repo.period_stars else ""
     observations = "\n".join(f"   - {item}" for item in repo_observations(repo, section))
     return textwrap.dedent(
         f"""
         {index}. {repo.full_name}
            GitHub: {repo.html_url}
-           ??: {truncate(repo.description)}
-           ??: {repo.language} | Stars: {repo.stargazers_count:,} | Forks: {repo.forks_count:,}{period}
-           ??: {format_date(repo.created_at)} | ????: {format_date(repo.pushed_at or repo.updated_at)}
-           Topics/???: {topics}
-           ????: {repo_reason(repo, section)}
-           ???:
+           \u7b80\u4ecb: {truncate(repo.description)}
+           \u8bed\u8a00: {repo.language} | Stars: {repo.stargazers_count:,} | Forks: {repo.forks_count:,}{period}
+           \u521b\u5efa: {format_date(repo.created_at)} | \u6700\u8fd1\u66f4\u65b0: {format_date(repo.pushed_at or repo.updated_at)}
+           Topics/\u5173\u952e\u8bcd: {topics}
+           \u63a8\u8350\u7406\u7531: {repo_reason(repo, section)}
+           \u5feb\u901f\u89c2\u5bdf:
         {observations}
         """
     ).strip()
@@ -501,17 +501,17 @@ def html_repo_block(index: int, repo: Repo, section: str) -> str:
     meta = section_meta(section)
     topics = "".join(html_badge(topic_display(t), fg=meta["accent"], bg=meta["soft"], border=meta["border"]) for t in repo.topics[:6])
     if not topics:
-        topics = html_badge("?????")
+        topics = html_badge("\u6682\u65e0\u5173\u952e\u8bcd")
     stat_badges = "".join(
         [
-            html_badge(f"?? {repo.language}"),
+            html_badge(f"\u8bed\u8a00 {repo.language}"),
             html_badge(f"Stars {repo.stargazers_count:,}"),
             html_badge(f"Forks {repo.forks_count:,}"),
-            html_badge(f"???? {format_date(repo.pushed_at or repo.updated_at)}"),
+            html_badge(f"\u6700\u8fd1\u66f4\u65b0 {format_date(repo.pushed_at or repo.updated_at)}"),
         ]
     )
     if repo.period_stars:
-        stat_badges += html_badge(f"???? {repo.period_stars:,} ?", fg="#1a7f37", bg="#dafbe1", border="#aceebb")
+        stat_badges += html_badge(f"\u672c\u671f\u65b0\u589e {repo.period_stars:,} \u661f", fg="#1a7f37", bg="#dafbe1", border="#aceebb")
     observation_items = "".join(
         f'<li style="margin:0 0 6px;">{html.escape(item)}</li>' for item in repo_observations(repo, section)
     )
@@ -523,22 +523,22 @@ def html_repo_block(index: int, repo: Repo, section: str) -> str:
             <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
               <span style="display:inline-block;min-width:34px;height:34px;line-height:34px;text-align:center;border-radius:999px;background:{meta['soft']};color:{meta['accent']};font-weight:700;">{index}</span>
               <div>
-                <div style="font-size:17px;font-weight:700;line-height:1.35;">
+                <div style="font-size:18px;font-weight:700;line-height:1.35;">
                   <a href="{html.escape(repo.html_url)}" style="color:#0f172a;text-decoration:none;">{html.escape(repo.full_name)}</a>
                 </div>
                 <div style="margin-top:4px;">{html_badge(meta['label'], fg=meta['accent'], bg=meta['soft'], border=meta['border'])}</div>
               </div>
             </div>
           </div>
-          <div style="margin-top:12px;color:#24292f;line-height:1.72;font-size:14px;">{html.escape(truncate(repo.description, 220))}</div>
+          <div style="margin-top:12px;color:#24292f;line-height:1.75;font-size:14px;">{html.escape(truncate(repo.description, 220))}</div>
           <div style="margin-top:14px;">{stat_badges}</div>
           <div style="margin-top:6px;">{topics}</div>
-          <div style="margin-top:14px;padding:12px 14px;border-radius:12px;background:#f6f8fa;color:#1f2328;line-height:1.7;">
-            <strong>?????</strong>{html.escape(repo_reason(repo, section))}
+          <div style="margin-top:14px;padding:12px 14px;border-radius:12px;background:#f6f8fa;color:#1f2328;line-height:1.72;">
+            <strong>\u63a8\u8350\u7406\u7531\uff1a</strong>{html.escape(repo_reason(repo, section))}
           </div>
           <div style="margin-top:12px;padding:12px 14px;border-radius:12px;background:#fafbfc;border:1px dashed #d0d7de;">
-            <div style="font-size:13px;font-weight:700;color:#57606a;margin-bottom:8px;">????</div>
-            <ul style="margin:0;padding-left:18px;color:#24292f;line-height:1.65;">{observation_items}</ul>
+            <div style="font-size:13px;font-weight:700;color:#57606a;margin-bottom:8px;">\u5feb\u901f\u89c2\u5bdf</div>
+            <ul style="margin:0;padding-left:18px;color:#24292f;line-height:1.68;">{observation_items}</ul>
           </div>
         </div>
       </td>
@@ -550,27 +550,27 @@ def build_report(innovation: list[Repo], fun: list[Repo], report_days: int, sour
     now_cn = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
     today_cn = now_cn.strftime("%Y-%m-%d")
     generated_at = now_cn.strftime("%Y-%m-%d %H:%M")
-    subject = f"?? GitHub ?????? - {today_cn}"
+    subject = f"\u6bcf\u65e5 GitHub \u70ed\u70b9\u9879\u76ee\u7b80\u62a5 - {today_cn}"
 
     all_repos = innovation + fun
     summary_lines = [
-        f"?????{generated_at}??????",
-        f"???????? {report_days} ?",
-        f"?????{source_text}",
-        f"?????{top_languages(all_repos)}",
+        f"\u751f\u6210\u65f6\u95f4\uff1a{generated_at}\uff08\u5317\u4eac\u65f6\u95f4\uff09",
+        f"\u7edf\u8ba1\u7a97\u53e3\uff1a\u6700\u8fd1\u7ea6 {report_days} \u5929",
+        f"\u6570\u636e\u6765\u6e90\uff1a{source_text}",
+        f"\u8bed\u8a00\u70ed\u70b9\uff1a{top_languages(all_repos)}",
     ]
 
-    plain_parts = [subject, "", "??", *summary_lines, "", "???????? Top 5"]
+    plain_parts = [subject, "", "\u4eca\u65e5\u6982\u89c8", *summary_lines, "", "\u4e00\u3001\u6280\u672f\u521b\u65b0\u9879\u76ee Top 5"]
     plain_parts.extend(plain_repo_block(i, repo, "innovation") for i, repo in enumerate(innovation, 1))
-    plain_parts.extend(["", "?????? Top 3"])
+    plain_parts.extend(["", "\u4e8c\u3001\u6709\u8da3\u9879\u76ee Top 3"])
     plain_parts.extend(plain_repo_block(i, repo, "fun") for i, repo in enumerate(fun, 1))
     plain_parts.extend(
         [
             "",
-            "??????",
-            "- ???????????????? Trending ???????????????",
-            "- ??????????? README??????????Demo ????????",
-            "- ??????????????????????????????????",
+            "\u4e09\u3001\u9605\u8bfb\u5efa\u8bae",
+            "- \u4eca\u5929\u5165\u9009\u7684\u4ed3\u5e93\u66f4\u504f\u5411\u8fd1\u671f\u6d3b\u8dc3\u66f4\u65b0\u3001\u5728 Trending \u6216\u641c\u7d22\u70ed\u5ea6\u4e0a\u6709\u660e\u663e\u8868\u73b0\u7684\u9879\u76ee\u3002",
+            "- \u6280\u672f\u521b\u65b0\u7c7b\u4ed3\u5e93\u9002\u5408\u91cd\u70b9\u67e5\u770b README\u3001\u67b6\u6784\u8bf4\u660e\u3001Demo \u548c\u793e\u533a\u7ef4\u62a4\u60c5\u51b5\u3002",
+            "- \u6709\u8da3\u9879\u76ee\u9002\u5408\u5feb\u901f\u4f53\u9a8c\u4ea4\u4e92\u8bbe\u8ba1\u3001\u7ec8\u7aef\u73a9\u6cd5\u3001\u6548\u7387\u5de5\u5177\u6216\u521b\u610f\u8868\u8fbe\u3002",
         ]
     )
     plain_text = "\n\n".join(plain_parts)
@@ -579,60 +579,61 @@ def build_report(innovation: list[Repo], fun: list[Repo], report_days: int, sour
     fun_rows = "".join(html_repo_block(i, repo, "fun") for i, repo in enumerate(fun, 1))
     overview_badges = "".join(
         [
-            html_badge("5 ???????", fg="#0969da", bg="#ddf4ff", border="#b6e3ff"),
-            html_badge("3 ?????", fg="#8250df", bg="#fbefff", border="#e9d8fd"),
-            html_badge(f"?? {report_days} ?", fg="#1f2328", bg="#f6f8fa", border="#d0d7de"),
-            html_badge(f"?????{top_languages(all_repos)}", fg="#1a7f37", bg="#dafbe1", border="#aceebb"),
+            html_badge("5 \u4e2a\u6280\u672f\u521b\u65b0\u9879\u76ee", fg="#0969da", bg="#ddf4ff", border="#b6e3ff"),
+            html_badge("3 \u4e2a\u6709\u8da3\u9879\u76ee", fg="#8250df", bg="#fbefff", border="#e9d8fd"),
+            html_badge(f"\u6700\u8fd1 {report_days} \u5929", fg="#1f2328", bg="#f6f8fa", border="#d0d7de"),
+            html_badge(f"\u8bed\u8a00\u70ed\u70b9\uff1a{top_languages(all_repos)}", fg="#1a7f37", bg="#dafbe1", border="#aceebb"),
         ]
     )
     html_text = f"""
     <!doctype html>
     <html lang="zh-CN">
-    <body style="margin:0;padding:0;background:#eef2f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#24292f;">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>{html.escape(subject)}</title>
+    </head>
+    <body style="margin:0;padding:0;background:#eef2f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#24292f;">
       <div style="max-width:820px;margin:0 auto;padding:24px 16px 40px;">
         <div style="background:linear-gradient(135deg,#0f172a 0%,#1d4ed8 100%);border-radius:22px;padding:28px 28px 24px;color:#ffffff;box-shadow:0 10px 30px rgba(15,23,42,0.18);">
-          <div style="font-size:13px;opacity:0.88;letter-spacing:0.02em;">GitHub Hot Projects Daily Digest</div>
+          <div style="font-size:13px;opacity:0.88;letter-spacing:0.02em;">GitHub Daily Digest</div>
           <h1 style="margin:10px 0 10px;font-size:28px;line-height:1.25;">{html.escape(subject)}</h1>
-          <p style="margin:0 0 14px;font-size:15px;line-height:1.75;color:rgba(255,255,255,0.9);">??????????? GitHub ?????????????????????????????????????</p>
+          <p style="margin:0 0 14px;font-size:15px;line-height:1.8;color:rgba(255,255,255,0.92);">\u4e3a\u4f60\u7b5b\u9009\u8fd1\u671f\u503c\u5f97\u5173\u6ce8\u7684 GitHub \u70ed\u70b9\u4ed3\u5e93\uff0c\u517c\u987e\u6280\u672f\u521b\u65b0\u4ef7\u503c\u4e0e\u6709\u8da3\u53ef\u73a9\u7684\u9879\u76ee\u7075\u611f\uff0c\u65b9\u4fbf\u6bcf\u5929\u7528 3 \u5230 5 \u5206\u949f\u5b8c\u6210\u9ad8\u8d28\u91cf\u6d4f\u89c8\u3002</p>
           <div>{overview_badges}</div>
         </div>
 
         <div style="background:#ffffff;border:1px solid #d8dee4;border-radius:18px;padding:22px 24px;margin-top:18px;">
-          <h2 style="margin:0 0 14px;font-size:20px;color:#0f172a;">????</h2>
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
-            <tr>
-              <td style="padding:10px 12px;background:#f6f8fa;border-radius:12px;">
-                <div style="font-size:13px;color:#57606a;margin-bottom:4px;">????</div>
-                <div style="font-size:16px;font-weight:700;color:#1f2328;">{generated_at}??????</div>
-              </td>
-            </tr>
-          </table>
+          <h2 style="margin:0 0 14px;font-size:20px;color:#0f172a;">\u4eca\u65e5\u6982\u89c8</h2>
+          <div style="padding:12px 14px;background:#f6f8fa;border-radius:12px;color:#1f2328;line-height:1.8;">
+            <div><strong>\u751f\u6210\u65f6\u95f4\uff1a</strong>{generated_at}\uff08\u5317\u4eac\u65f6\u95f4\uff09</div>
+            <div><strong>\u7edf\u8ba1\u7a97\u53e3\uff1a</strong>\u6700\u8fd1\u7ea6 {report_days} \u5929</div>
+            <div><strong>\u6570\u636e\u6765\u6e90\uff1a</strong>{html.escape(source_text)}</div>
+            <div><strong>\u8bed\u8a00\u70ed\u70b9\uff1a</strong>{html.escape(top_languages(all_repos))}</div>
+          </div>
           <ul style="margin:16px 0 0;padding-left:20px;line-height:1.8;color:#24292f;">
-            <li>???????? {report_days} ?</li>
-            <li>?????{html.escape(source_text)}</li>
-            <li>?????{html.escape(top_languages(all_repos))}</li>
-            <li>???????????????????????????? README?</li>
+            <li>\u5efa\u8bae\u5148\u770b\u6bcf\u4e2a\u9879\u76ee\u7684\u201c\u63a8\u8350\u7406\u7531\u201d\u548c\u201c\u5feb\u901f\u89c2\u5bdf\u201d\uff0c\u518d\u51b3\u5b9a\u662f\u5426\u8fdb\u5165\u4ed3\u5e93\u6df1\u8bfb README\u3002</li>
+            <li>\u5982\u679c\u770b\u5230\u611f\u5174\u8da3\u7684\u9879\u76ee\uff0c\u5efa\u8bae\u987a\u624b\u6536\u85cf\u6216\u8bb0\u5f55\u5230\u4f60\u7684\u77e5\u8bc6\u5e93\uff0c\u65b9\u4fbf\u540e\u7eed\u8ddf\u8fdb\u3002</li>
           </ul>
         </div>
 
         <div style="margin-top:18px;background:#ffffff;border:1px solid #d8dee4;border-radius:18px;padding:22px 24px;">
-          <h2 style="margin:0 0 14px;font-size:22px;color:#0f172a;">???????? Top 5</h2>
-          <p style="margin:0 0 16px;color:#57606a;line-height:1.75;">?????????????????????????????????????????????</p>
+          <h2 style="margin:0 0 14px;font-size:22px;color:#0f172a;">\u4e00\u3001\u6280\u672f\u521b\u65b0\u9879\u76ee Top 5</h2>
+          <p style="margin:0 0 16px;color:#57606a;line-height:1.8;">\u4f18\u5148\u5173\u6ce8\u8fd1\u671f\u70ed\u5ea6\u9ad8\u3001\u65b9\u5411\u660e\u786e\u3001\u6280\u672f\u5b9e\u73b0\u503c\u5f97\u8ddf\u8fdb\u7684\u4ed3\u5e93\uff0c\u9002\u5408\u7528\u4e8e\u9009\u9898\u3001\u7814\u7a76\u3001\u539f\u578b\u9a8c\u8bc1\u6216\u5de5\u7a0b\u53c2\u8003\u3002</p>
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">{innovation_rows}</table>
         </div>
 
         <div style="margin-top:18px;background:#ffffff;border:1px solid #d8dee4;border-radius:18px;padding:22px 24px;">
-          <h2 style="margin:0 0 14px;font-size:22px;color:#0f172a;">?????? Top 3</h2>
-          <p style="margin:0 0 16px;color:#57606a;line-height:1.75;">???????????????????????????????????????????</p>
+          <h2 style="margin:0 0 14px;font-size:22px;color:#0f172a;">\u4e8c\u3001\u6709\u8da3\u9879\u76ee Top 3</h2>
+          <p style="margin:0 0 16px;color:#57606a;line-height:1.8;">\u8fd9\u4e9b\u9879\u76ee\u66f4\u504f\u521b\u610f\u3001\u6548\u7387\u3001\u7ec8\u7aef\u73a9\u6cd5\u6216\u4ea4\u4e92\u4f53\u9a8c\uff0c\u9002\u5408\u5feb\u901f\u6253\u5f00\u770b\u770b\uff0c\u83b7\u5f97\u7075\u611f\u6216\u76f4\u63a5\u4e0a\u624b\u4f53\u9a8c\u3002</p>
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">{fun_rows}</table>
         </div>
 
         <div style="margin-top:18px;background:#ffffff;border:1px solid #d8dee4;border-radius:18px;padding:22px 24px;">
-          <h2 style="margin:0 0 14px;font-size:20px;color:#0f172a;">??????</h2>
-          <ul style="margin:0;padding-left:20px;line-height:1.8;color:#24292f;">
-            <li>??????? README?License??? Commit?Issue/PR ????????????????</li>
-            <li>???????????????? Demo?????????????????????????</li>
-            <li>????????????????????????????????????????</li>
+          <h2 style="margin:0 0 14px;font-size:20px;color:#0f172a;">\u4e09\u3001\u9605\u8bfb\u5efa\u8bae</h2>
+          <ul style="margin:0;padding-left:20px;line-height:1.9;color:#24292f;">
+            <li>\u5148\u770b\u4ed3\u5e93\u9996\u9875\u7684 README\u3001License\u3001\u6700\u8fd1 Commit\u3001Issue/PR \u6d3b\u8dc3\u5ea6\uff0c\u518d\u5224\u65ad\u662f\u5426\u503c\u5f97\u6301\u7eed\u8ddf\u8e2a\u3002</li>
+            <li>\u6280\u672f\u521b\u65b0\u7c7b\u4ed3\u5e93\u5efa\u8bae\u91cd\u70b9\u770b Demo\u3001\u67b6\u6784\u8bf4\u660e\u3001\u5b89\u88c5\u95e8\u69db\u3001\u4e8c\u6b21\u5f00\u53d1\u7a7a\u95f4\u4e0e\u793e\u533a\u54cd\u5e94\u901f\u5ea6\u3002</li>
+            <li>\u6709\u8da3\u9879\u76ee\u5efa\u8bae\u91cd\u70b9\u5173\u6ce8\u4ea4\u4e92\u4f53\u9a8c\u3001\u9002\u7528\u573a\u666f\u3001\u53ef\u6269\u5c55\u73a9\u6cd5\uff0c\u4ee5\u53ca\u662f\u5426\u9002\u5408\u6536\u85cf\u6216\u8f6c\u53d1\u3002</li>
           </ul>
         </div>
       </div>
