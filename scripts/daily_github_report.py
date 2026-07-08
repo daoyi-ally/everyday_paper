@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -39,6 +39,9 @@ DEFAULT_MAIL_TO = "3087130357@qq.com"
 DEFAULT_REPORT_DAYS = 7
 HTTP_TIMEOUT_SECONDS = 12
 HTTP_RETRIES = 2
+KIMI_CHAT_COMPLETIONS_URL = "https://api.moonshot.ai/v1/chat/completions"
+DEFAULT_KIMI_MODEL = "kimi-k2.6"
+DEFAULT_KIMI_MAX_TOKENS = 4096
 
 INNOVATION_KEYWORDS = {
     "ai", "agent", "agents", "llm", "rag", "automation", "robot", "robotics",
@@ -106,6 +109,13 @@ class Repo:
             section_hint=section_hint,
             period_stars=int(item.get("period_stars") or 0),
         )
+
+
+@dataclass(frozen=True)
+class RepoInsight:
+    full_name: str
+    intro_zh: str = ""
+    reason_zh: str = ""
 
 
 def load_dotenv(path: Path) -> None:
@@ -392,6 +402,194 @@ def top_languages(repos: Iterable[Repo], limit: int = 3) -> str:
     return "\u3001".join(f"{name}({count})" for name, count in top)
 
 
+def normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def fallback_intro(repo: Repo, section: str) -> str:
+    topic_names = [topic_display(topic) for topic in repo.topics[:4] if topic]
+    topic_text = "\u3001".join(topic_names) if topic_names else (repo.language if repo.language and repo.language != "Unknown" else "\u901a\u7528\u5f00\u53d1")
+    description = truncate(repo.description, 86)
+    if section == "innovation":
+        return f"\u8fd9\u662f\u4e00\u4e2a\u56f4\u7ed5 {topic_text} \u7684\u5f00\u6e90\u9879\u76ee\uff0c\u4e3b\u8981\u4f7f\u7528 {repo.language}\uff1b\u4ece\u4ed3\u5e93\u516c\u5f00\u7b80\u4ecb\u770b\uff0c\u5b83\u91cd\u70b9\u805a\u7126\u4e8e\uff1a{description}"
+    return f"\u8fd9\u662f\u4e00\u4e2a\u504f\u5411 {topic_text} \u7684\u6709\u8da3\u9879\u76ee\uff0c\u4e3b\u8981\u4f7f\u7528 {repo.language}\uff1b\u4ece\u4ed3\u5e93\u516c\u5f00\u7b80\u4ecb\u770b\uff0c\u5b83\u4e3b\u6253\uff1a{description}"
+
+
+def repo_intro(repo: Repo, section: str, repo_insights: dict[str, RepoInsight] | None = None) -> str:
+    insight = (repo_insights or {}).get(repo.full_name)
+    if insight and insight.intro_zh:
+        return insight.intro_zh
+    return fallback_intro(repo, section)
+
+
+def repo_reason_text(repo: Repo, section: str, repo_insights: dict[str, RepoInsight] | None = None) -> str:
+    insight = (repo_insights or {}).get(repo.full_name)
+    if insight and insight.reason_zh:
+        return insight.reason_zh
+    return repo_reason(repo, section)
+
+
+def repo_intro_source(repo: Repo, repo_insights: dict[str, RepoInsight] | None = None) -> str:
+    insight = (repo_insights or {}).get(repo.full_name)
+    return "Kimi \u4e2d\u6587\u89e3\u8bfb" if insight and insight.intro_zh else "\u89c4\u5219\u515c\u5e95\u5bfc\u8bfb"
+
+
+def extract_json_object(text: str) -> str:
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("No JSON object found in model response")
+    return text[start : end + 1]
+
+
+def message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text") or ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(part for part in parts if part)
+    return str(content or "")
+
+
+def build_kimi_repo_prompt(repos: list[Repo], repo_sections: dict[str, str]) -> str:
+    payload = []
+    for repo in repos:
+        payload.append(
+            {
+                "full_name": repo.full_name,
+                "section": "innovation" if repo_sections.get(repo.full_name) == "innovation" else "fun",
+                "html_url": repo.html_url,
+                "description": repo.description,
+                "language": repo.language,
+                "stargazers_count": repo.stargazers_count,
+                "forks_count": repo.forks_count,
+                "period_stars": repo.period_stars,
+                "created_at": format_date(repo.created_at),
+                "updated_at": format_date(repo.pushed_at or repo.updated_at),
+                "topics": list(repo.topics[:8]),
+            }
+        )
+    input_json = json.dumps({"repos": payload}, ensure_ascii=False, indent=2)
+    return textwrap.dedent(
+        f"""
+        You are editing a Chinese GitHub email digest. Based only on the provided repository metadata, write concise Simplified Chinese introductions for each repository.
+
+        Requirements:
+        1. Return exactly one JSON object with the top-level shape {{"repos": [...]}}.
+        2. Each item in repos must contain full_name, intro_zh, and reason_zh.
+        3. Keep full_name exactly the same as the input and cover every repository.
+        4. intro_zh must be 1-2 sentences in Simplified Chinese, about 40-90 Chinese characters, first saying what the repo does and then why it is worth following.
+        5. reason_zh must be 1 sentence in Simplified Chinese, about 25-60 Chinese characters, highlighting the near-term reason to pay attention.
+        6. Do not invent README details, benchmarks, customer stories, author background, or unsupported technical claims.
+        7. No Markdown. No extra explanation. JSON object only.
+
+        Example output:
+        {{
+          "repos": [
+            {{
+              "full_name": "owner/repo",
+              "intro_zh": "\u8fd9\u662f\u4e00\u4e2a\u9762\u5411\u5f00\u53d1\u8005\u7684\u5de5\u5177\uff0c\u9002\u5408\u5173\u6ce8\u5176\u5b9e\u73b0\u601d\u8def\u3002",
+              "reason_zh": "\u8fd1\u671f\u70ed\u5ea6\u4e0a\u5347\uff0c\u9002\u5408\u5feb\u901f\u8ddf\u8fdb\u5176\u65b9\u5411\u4e0e\u5b9e\u73b0\u3002"
+            }}
+          ]
+        }}
+
+        Input JSON:
+        {input_json}
+        """
+    ).strip()
+
+
+def generate_repo_insights(repos: list[Repo], repo_sections: dict[str, str]) -> tuple[dict[str, RepoInsight], str]:
+    api_key = os.getenv("MOONSHOT_API_KEY", "").strip()
+    if not api_key:
+        print("INFO: MOONSHOT_API_KEY not set; using fallback Chinese copy.", file=sys.stderr)
+        return {}, ""
+
+    model = os.getenv("KIMI_MODEL", DEFAULT_KIMI_MODEL).strip() or DEFAULT_KIMI_MODEL
+    max_tokens = int(os.getenv("KIMI_MAX_TOKENS") or str(DEFAULT_KIMI_MAX_TOKENS))
+    prompt = build_kimi_repo_prompt(repos, repo_sections)
+    body = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a concise Chinese tech newsletter editor. Only use the provided repository metadata. Return one valid JSON object and nothing else.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "response_format": {"type": "json_object"},
+        "thinking": {"type": "disabled"},
+        "max_tokens": max_tokens,
+    }
+    request = urllib.request.Request(
+        KIMI_CHAT_COMPLETIONS_URL,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else str(exc)
+        print(f"WARN: Kimi request failed ({exc.code}): {details[:300]}", file=sys.stderr)
+        return {}, ""
+    except Exception as exc:
+        print(f"WARN: Kimi request failed: {exc}", file=sys.stderr)
+        return {}, ""
+
+    choices = payload.get("choices") or []
+    if not choices:
+        print("WARN: Kimi returned no choices; using fallback Chinese copy.", file=sys.stderr)
+        return {}, ""
+
+    raw_content = message_text((choices[0].get("message") or {}).get("content"))
+    if not raw_content:
+        print("WARN: Kimi returned empty content; using fallback Chinese copy.", file=sys.stderr)
+        return {}, ""
+
+    try:
+        parsed = json.loads(extract_json_object(raw_content))
+    except Exception as exc:
+        print(f"WARN: Kimi JSON parse failed: {exc}", file=sys.stderr)
+        return {}, ""
+
+    expected = {repo.full_name for repo in repos}
+    insights: dict[str, RepoInsight] = {}
+    for item in parsed.get("repos") or []:
+        if not isinstance(item, dict):
+            continue
+        full_name = normalize_text(str(item.get("full_name") or ""))
+        if full_name not in expected:
+            continue
+        intro_zh = normalize_text(str(item.get("intro_zh") or ""))
+        reason_zh = normalize_text(str(item.get("reason_zh") or ""))
+        if not intro_zh and not reason_zh:
+            continue
+        insights[full_name] = RepoInsight(
+            full_name=full_name,
+            intro_zh=truncate(intro_zh, 120),
+            reason_zh=truncate(reason_zh, 90),
+        )
+
+    if not insights:
+        print("WARN: Kimi returned no usable repo insights; using fallback Chinese copy.", file=sys.stderr)
+        return {}, ""
+
+    print(f"INFO: Kimi generated Chinese insights for {len(insights)}/{len(repos)} repos.", file=sys.stderr)
+    return insights, f"Kimi\uff08{model}\uff09"
+
+
 def section_meta(section: str) -> dict[str, str]:
     if section == "innovation":
         return {
@@ -471,19 +669,24 @@ def select_reports(innovation: list[Repo], fun: list[Repo]) -> tuple[list[Repo],
     return innovation_selected[:5], fun_selected[:3]
 
 
-def plain_repo_block(index: int, repo: Repo, section: str) -> str:
+def plain_repo_block(index: int, repo: Repo, section: str, repo_insights: dict[str, RepoInsight] | None = None) -> str:
     topics = ", ".join(topic_display(t) for t in repo.topics[:8]) if repo.topics else "\u65e0"
     period = f" | \u672c\u671f\u65b0\u589e Stars: {repo.period_stars:,}" if repo.period_stars else ""
     observations = "\n".join(f"   - {item}" for item in repo_observations(repo, section))
+    intro_text = repo_intro(repo, section, repo_insights)
+    reason_text = repo_reason_text(repo, section, repo_insights)
+    intro_source = repo_intro_source(repo, repo_insights)
     return textwrap.dedent(
         f"""
         {index}. {repo.full_name}
            GitHub: {repo.html_url}
-           \u7b80\u4ecb: {truncate(repo.description)}
+           \u4e2d\u6587\u5bfc\u8bfb: {intro_text}
+           \u5bfc\u8bfb\u6765\u6e90: {intro_source}
+           \u539f\u59cb\u7b80\u4ecb: {truncate(repo.description)}
            \u8bed\u8a00: {repo.language} | Stars: {repo.stargazers_count:,} | Forks: {repo.forks_count:,}{period}
            \u521b\u5efa: {format_date(repo.created_at)} | \u6700\u8fd1\u66f4\u65b0: {format_date(repo.pushed_at or repo.updated_at)}
            Topics/\u5173\u952e\u8bcd: {topics}
-           \u63a8\u8350\u7406\u7531: {repo_reason(repo, section)}
+           \u63a8\u8350\u7406\u7531: {reason_text}
            \u5feb\u901f\u89c2\u5bdf:
         {observations}
         """
@@ -497,17 +700,22 @@ def html_badge(text: str, *, fg: str = "#57606a", bg: str = "#f6f8fa", border: s
     )
 
 
-def html_repo_block(index: int, repo: Repo, section: str) -> str:
+def html_repo_block(index: int, repo: Repo, section: str, repo_insights: dict[str, RepoInsight] | None = None) -> str:
     meta = section_meta(section)
     topics = "".join(html_badge(topic_display(t), fg=meta["accent"], bg=meta["soft"], border=meta["border"]) for t in repo.topics[:6])
     if not topics:
         topics = html_badge("\u6682\u65e0\u5173\u952e\u8bcd")
+    insight = (repo_insights or {}).get(repo.full_name)
+    intro_text = repo_intro(repo, section, repo_insights)
+    reason_text = repo_reason_text(repo, section, repo_insights)
+    intro_source = "Kimi \u4e2d\u6587\u5bfc\u8bfb" if insight and insight.intro_zh else "\u89c4\u5219\u515c\u5e95\u5bfc\u8bfb"
     stat_badges = "".join(
         [
             html_badge(f"\u8bed\u8a00 {repo.language}"),
             html_badge(f"Stars {repo.stargazers_count:,}"),
             html_badge(f"Forks {repo.forks_count:,}"),
             html_badge(f"\u6700\u8fd1\u66f4\u65b0 {format_date(repo.pushed_at or repo.updated_at)}"),
+            html_badge(intro_source, fg="#0550ae", bg="#ddf4ff", border="#b6e3ff") if insight and insight.intro_zh else html_badge(intro_source),
         ]
     )
     if repo.period_stars:
@@ -530,11 +738,17 @@ def html_repo_block(index: int, repo: Repo, section: str) -> str:
               </div>
             </div>
           </div>
-          <div style="margin-top:12px;color:#24292f;line-height:1.75;font-size:14px;">{html.escape(truncate(repo.description, 220))}</div>
+          <div style="margin-top:12px;padding:14px 16px;border-radius:14px;background:#f8fbff;border:1px solid #dbeafe;color:#0f172a;line-height:1.82;font-size:14px;">
+            <div style="font-size:13px;font-weight:700;color:#0550ae;margin-bottom:6px;">\u4e2d\u6587\u5bfc\u8bfb</div>
+            <div>{html.escape(intro_text)}</div>
+          </div>
+          <div style="margin-top:12px;color:#57606a;line-height:1.75;font-size:13px;">
+            <strong>\u539f\u59cb\u7b80\u4ecb\uff1a</strong>{html.escape(truncate(repo.description, 220))}
+          </div>
           <div style="margin-top:14px;">{stat_badges}</div>
           <div style="margin-top:6px;">{topics}</div>
           <div style="margin-top:14px;padding:12px 14px;border-radius:12px;background:#f6f8fa;color:#1f2328;line-height:1.72;">
-            <strong>\u63a8\u8350\u7406\u7531\uff1a</strong>{html.escape(repo_reason(repo, section))}
+            <strong>\u63a8\u8350\u7406\u7531\uff1a</strong>{html.escape(reason_text)}
           </div>
           <div style="margin-top:12px;padding:12px 14px;border-radius:12px;background:#fafbfc;border:1px dashed #d0d7de;">
             <div style="font-size:13px;font-weight:700;color:#57606a;margin-bottom:8px;">\u5feb\u901f\u89c2\u5bdf</div>
@@ -546,43 +760,53 @@ def html_repo_block(index: int, repo: Repo, section: str) -> str:
     """
 
 
-def build_report(innovation: list[Repo], fun: list[Repo], report_days: int, source_text: str = "GitHub Trending + GitHub Search API") -> tuple[str, str, str]:
+def build_report(
+    innovation: list[Repo],
+    fun: list[Repo],
+    report_days: int,
+    source_text: str = "GitHub Trending + GitHub Search API",
+    repo_insights: dict[str, RepoInsight] | None = None,
+    ai_provider: str = "",
+) -> tuple[str, str, str]:
     now_cn = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
     today_cn = now_cn.strftime("%Y-%m-%d")
     generated_at = now_cn.strftime("%Y-%m-%d %H:%M")
     subject = f"\u6bcf\u65e5 GitHub \u70ed\u70b9\u9879\u76ee\u7b80\u62a5 - {today_cn}"
 
     all_repos = innovation + fun
+    ai_text = ai_provider or "\u672a\u542f\u7528 AI \uff08\u4f7f\u7528\u89c4\u5219\u515c\u5e95\u5bfc\u8bfb\uff09"
     summary_lines = [
         f"\u751f\u6210\u65f6\u95f4\uff1a{generated_at}\uff08\u5317\u4eac\u65f6\u95f4\uff09",
         f"\u7edf\u8ba1\u7a97\u53e3\uff1a\u6700\u8fd1\u7ea6 {report_days} \u5929",
         f"\u6570\u636e\u6765\u6e90\uff1a{source_text}",
+        f"AI \u4e2d\u6587\u5bfc\u8bfb\uff1a{ai_text}",
         f"\u8bed\u8a00\u70ed\u70b9\uff1a{top_languages(all_repos)}",
     ]
 
     plain_parts = [subject, "", "\u4eca\u65e5\u6982\u89c8", *summary_lines, "", "\u4e00\u3001\u6280\u672f\u521b\u65b0\u9879\u76ee Top 5"]
-    plain_parts.extend(plain_repo_block(i, repo, "innovation") for i, repo in enumerate(innovation, 1))
+    plain_parts.extend(plain_repo_block(i, repo, "innovation", repo_insights) for i, repo in enumerate(innovation, 1))
     plain_parts.extend(["", "\u4e8c\u3001\u6709\u8da3\u9879\u76ee Top 3"])
-    plain_parts.extend(plain_repo_block(i, repo, "fun") for i, repo in enumerate(fun, 1))
+    plain_parts.extend(plain_repo_block(i, repo, "fun", repo_insights) for i, repo in enumerate(fun, 1))
     plain_parts.extend(
         [
             "",
             "\u4e09\u3001\u9605\u8bfb\u5efa\u8bae",
-            "- \u4eca\u5929\u5165\u9009\u7684\u4ed3\u5e93\u66f4\u504f\u5411\u8fd1\u671f\u6d3b\u8dc3\u66f4\u65b0\u3001\u5728 Trending \u6216\u641c\u7d22\u70ed\u5ea6\u4e0a\u6709\u660e\u663e\u8868\u73b0\u7684\u9879\u76ee\u3002",
+            "- \u5efa\u8bae\u5148\u770b\u6bcf\u4e2a\u9879\u76ee\u7684\u201c\u4e2d\u6587\u5bfc\u8bfb\u201d\u548c\u201c\u63a8\u8350\u7406\u7531\u201d\uff0c\u518d\u51b3\u5b9a\u662f\u5426\u8fdb\u5165 README \u6df1\u8bfb\u3002",
             "- \u6280\u672f\u521b\u65b0\u7c7b\u4ed3\u5e93\u9002\u5408\u91cd\u70b9\u67e5\u770b README\u3001\u67b6\u6784\u8bf4\u660e\u3001Demo \u548c\u793e\u533a\u7ef4\u62a4\u60c5\u51b5\u3002",
             "- \u6709\u8da3\u9879\u76ee\u9002\u5408\u5feb\u901f\u4f53\u9a8c\u4ea4\u4e92\u8bbe\u8ba1\u3001\u7ec8\u7aef\u73a9\u6cd5\u3001\u6548\u7387\u5de5\u5177\u6216\u521b\u610f\u8868\u8fbe\u3002",
         ]
     )
     plain_text = "\n\n".join(plain_parts)
 
-    innovation_rows = "".join(html_repo_block(i, repo, "innovation") for i, repo in enumerate(innovation, 1))
-    fun_rows = "".join(html_repo_block(i, repo, "fun") for i, repo in enumerate(fun, 1))
+    innovation_rows = "".join(html_repo_block(i, repo, "innovation", repo_insights) for i, repo in enumerate(innovation, 1))
+    fun_rows = "".join(html_repo_block(i, repo, "fun", repo_insights) for i, repo in enumerate(fun, 1))
     overview_badges = "".join(
         [
             html_badge("5 \u4e2a\u6280\u672f\u521b\u65b0\u9879\u76ee", fg="#0969da", bg="#ddf4ff", border="#b6e3ff"),
             html_badge("3 \u4e2a\u6709\u8da3\u9879\u76ee", fg="#8250df", bg="#fbefff", border="#e9d8fd"),
             html_badge(f"\u6700\u8fd1 {report_days} \u5929", fg="#1f2328", bg="#f6f8fa", border="#d0d7de"),
             html_badge(f"\u8bed\u8a00\u70ed\u70b9\uff1a{top_languages(all_repos)}", fg="#1a7f37", bg="#dafbe1", border="#aceebb"),
+            html_badge(f"AI \u5bfc\u8bfb\uff1a{ai_provider}" if ai_provider else "AI \u5bfc\u8bfb\uff1a\u672a\u542f\u7528", fg="#0550ae", bg="#ddf4ff", border="#b6e3ff"),
         ]
     )
     html_text = f"""
@@ -608,10 +832,11 @@ def build_report(innovation: list[Repo], fun: list[Repo], report_days: int, sour
             <div><strong>\u751f\u6210\u65f6\u95f4\uff1a</strong>{generated_at}\uff08\u5317\u4eac\u65f6\u95f4\uff09</div>
             <div><strong>\u7edf\u8ba1\u7a97\u53e3\uff1a</strong>\u6700\u8fd1\u7ea6 {report_days} \u5929</div>
             <div><strong>\u6570\u636e\u6765\u6e90\uff1a</strong>{html.escape(source_text)}</div>
+            <div><strong>AI \u4e2d\u6587\u5bfc\u8bfb\uff1a</strong>{html.escape(ai_text)}</div>
             <div><strong>\u8bed\u8a00\u70ed\u70b9\uff1a</strong>{html.escape(top_languages(all_repos))}</div>
           </div>
           <ul style="margin:16px 0 0;padding-left:20px;line-height:1.8;color:#24292f;">
-            <li>\u5efa\u8bae\u5148\u770b\u6bcf\u4e2a\u9879\u76ee\u7684\u201c\u63a8\u8350\u7406\u7531\u201d\u548c\u201c\u5feb\u901f\u89c2\u5bdf\u201d\uff0c\u518d\u51b3\u5b9a\u662f\u5426\u8fdb\u5165\u4ed3\u5e93\u6df1\u8bfb README\u3002</li>
+            <li>\u5efa\u8bae\u5148\u770b\u6bcf\u4e2a\u9879\u76ee\u7684\u201c\u4e2d\u6587\u5bfc\u8bfb\u201d\u3001\u201c\u63a8\u8350\u7406\u7531\u201d\u548c\u201c\u5feb\u901f\u89c2\u5bdf\u201d\uff0c\u518d\u51b3\u5b9a\u662f\u5426\u8fdb\u5165\u4ed3\u5e93\u6df1\u8bfb README\u3002</li>
             <li>\u5982\u679c\u770b\u5230\u611f\u5174\u8da3\u7684\u9879\u76ee\uff0c\u5efa\u8bae\u987a\u624b\u6536\u85cf\u6216\u8bb0\u5f55\u5230\u4f60\u7684\u77e5\u8bc6\u5e93\uff0c\u65b9\u4fbf\u540e\u7eed\u8ddf\u8fdb\u3002</li>
           </ul>
         </div>
@@ -641,6 +866,7 @@ def build_report(innovation: list[Repo], fun: list[Repo], report_days: int, sour
     </html>
     """
     return subject, plain_text, html_text
+
 
 def require_env(name: str) -> str:
     value = os.getenv(name, "").strip()
@@ -699,7 +925,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"WARN: expected 5 innovation and 3 fun projects, got {len(innovation)} and {len(fun)}.", file=sys.stderr)
 
     source_text = "GitHub Trending" if skip_api else "GitHub Trending + GitHub Search API"
-    subject, plain_text, html_text = build_report(innovation, fun, report_days, source_text)
+    repo_sections = {repo.full_name: "innovation" for repo in innovation}
+    repo_sections.update({repo.full_name: "fun" for repo in fun})
+    repo_insights, ai_provider = generate_repo_insights(innovation + fun, repo_sections)
+    subject, plain_text, html_text = build_report(innovation, fun, report_days, source_text, repo_insights, ai_provider)
 
     if args.save_html:
         args.save_html.parent.mkdir(parents=True, exist_ok=True)
