@@ -489,7 +489,7 @@ def infer_repo_purpose(repo: Repo, section: str) -> str:
             return purpose
     description = truncate(repo.description, 88)
     if description and description != "暂无简介":
-        return f"从公开简介看，这是一个主要用于以下场景的项目：{description}"
+        return description
     if section == "innovation":
         return "这是一个近期热度较高、值得进一步查看 README 和示例的技术类项目"
     return "这是一个近期讨论度较高、适合快速体验和获取灵感的开源项目"
@@ -499,9 +499,8 @@ def infer_repo_purpose(repo: Repo, section: str) -> str:
 def fallback_intro(repo: Repo, section: str) -> str:
     purpose = infer_repo_purpose(repo, section)
     if repo.period_stars:
-        return f"这个项目是做什么的：{purpose}。它最近上升较快，本期约新增 {repo.period_stars:,} Stars，适合优先了解其使用场景和实际效果。"
-    return f"这个项目是做什么的：{purpose}。如果你想快速判断值不值得看，可以先从 README、示例和最近更新入手。"
-
+        return f"{purpose}。它最近上升较快，本期约新增 {repo.period_stars:,} Stars，适合优先了解它的实际用途和使用场景。"
+    return f"{purpose}。如果你想快速判断值不值得看，可以先从 README、示例和最近更新入手。"
 
 def repo_intro(repo: Repo, section: str, repo_insights: dict[str, RepoInsight] | None = None) -> str:
     insight = (repo_insights or {}).get(repo.full_name)
@@ -519,8 +518,20 @@ def repo_reason_text(repo: Repo, section: str, repo_insights: dict[str, RepoInsi
 
 def repo_intro_source(repo: Repo, repo_insights: dict[str, RepoInsight] | None = None) -> str:
     insight = (repo_insights or {}).get(repo.full_name)
-    return "Kimi \u4e2d\u6587\u89e3\u8bfb" if insight and insight.intro_zh else "\u89c4\u5219\u515c\u5e95\u5bfc\u8bfb"
+    return "Kimi 中文解读" if insight and insight.intro_zh else "规则兜底导读"
 
+
+def intro_source_summary(repos: list[Repo], repo_insights: dict[str, RepoInsight] | None = None) -> str:
+    total = len(repos)
+    kimi_count = sum(1 for repo in repos if repo_intro_source(repo, repo_insights) == "Kimi 中文解读")
+    fallback_count = max(total - kimi_count, 0)
+    if total == 0:
+        return "本期没有入选项目"
+    if kimi_count == 0:
+        return f"本期未使用 Kimi，{fallback_count}/{total} 个项目使用规则兜底导读"
+    if fallback_count == 0:
+        return f"本期已使用 Kimi 优化 {kimi_count}/{total} 个项目的中文理解"
+    return f"本期已使用 Kimi 优化 {kimi_count}/{total} 个项目的中文理解，其余 {fallback_count} 个使用规则兜底导读"
 
 def extract_json_object(text: str) -> str:
     start = text.find("{")
@@ -573,17 +584,18 @@ def build_kimi_repo_prompt(repos: list[Repo], repo_sections: dict[str, str]) -> 
         3. Keep full_name exactly the same as the input and cover every repository.
         4. intro_zh must be 1-2 sentences in Simplified Chinese, about 40-90 Chinese characters.
         5. The FIRST sentence of intro_zh must directly explain what the project does in plain Chinese, such as "用于整理系统提示词的资料仓库" or "用于会议转写和总结的本地助手".
-        6. Do NOT start intro_zh with language, tech stack, topics, or vague category labels like "一个 AI 项目" or "基于 TypeScript".
-        7. Do not add reason_zh, recommendation fields, or any extra keys.
-        8. Do not invent README details, benchmarks, customer stories, author background, or unsupported technical claims.
-        9. No Markdown. No extra explanation. JSON object only.
+        6. Do NOT start intro_zh with language, tech stack, topics, vague category labels like "一个 AI 项目" or "基于 TypeScript", or generic prefaces like "这个项目是做什么的：".
+        7. Write naturally in Chinese and introduce the project directly; avoid mechanical lead-ins.
+        8. Do not add reason_zh, recommendation fields, or any extra keys.
+        9. Do not invent README details, benchmarks, customer stories, author background, or unsupported technical claims.
+        10. No Markdown. No extra explanation. JSON object only.
 
         Example output:
         {{
           "repos": [
             {{
               "full_name": "owner/repo",
-              "intro_zh": "这个项目用于统一接入多个模型提供商，帮助开发者用一个接口切换不同 AI 服务。近期热度上升较快，适合先看它的接入方式和使用门槛。"
+              "intro_zh": "用于统一接入多个模型提供商，帮助开发者用一个接口切换不同 AI 服务。近期热度上升较快，适合先看它的接入方式和使用门槛。"
             }}
           ]
         }}
@@ -592,7 +604,6 @@ def build_kimi_repo_prompt(repos: list[Repo], repo_sections: dict[str, str]) -> 
         {input_json}
         """
     ).strip()
-
 
 def generate_repo_insights(repos: list[Repo], repo_sections: dict[str, str]) -> tuple[dict[str, RepoInsight], str]:
     api_key = os.getenv("MOONSHOT_API_KEY", "").strip()
@@ -906,11 +917,13 @@ def build_report(
 
     all_repos = innovation + fun + aigc
     ai_text = ai_provider or "未启用 AI（使用规则兜底导读）"
+    intro_source_text = intro_source_summary(all_repos, repo_insights)
     summary_lines = [
         f"生成时间：{generated_at}（北京时间）",
         f"统计窗口：最近约 {report_days} 天",
         f"数据来源：{source_text}",
         f"AI 中文导读：{ai_text}",
+        f"项目理解方式：{intro_source_text}",
         f"项目结构：热点 5 个 + 有趣 2 个 + AIGC 2 个",
         f"语言热点：{top_languages(all_repos)}",
     ]
@@ -956,6 +969,7 @@ def build_report(
             html_badge("热点 5 + 有趣 2 + AIGC 2", fg="#ffffff", bg="rgba(255,255,255,0.14)", border="rgba(255,255,255,0.22)"),
             html_badge(f"语言热点：{top_languages(all_repos)}", fg="#1a7f37", bg="#dafbe1", border="#aceebb"),
             html_badge(f"AI 导读：{ai_provider}" if ai_provider else "AI 导读：未启用", fg="#0550ae", bg="#ddf4ff", border="#b6e3ff"),
+            html_badge(intro_source_text, fg="#7c2d12", bg="#ffedd5", border="#fdba74"),
         ]
     )
     html_text = f"""
@@ -982,6 +996,7 @@ def build_report(
             <div><strong>统计窗口：</strong>最近约 {report_days} 天</div>
             <div><strong>数据来源：</strong>{html.escape(source_text)}</div>
             <div><strong>AI 中文导读：</strong>{html.escape(ai_text)}</div>
+            <div><strong>项目理解方式：</strong>{html.escape(intro_source_text)}</div>
             <div><strong>项目结构：</strong>热点 5 个 + 有趣 2 个 + AIGC 2 个</div>
             <div><strong>语言热点：</strong>{html.escape(top_languages(all_repos))}</div>
           </div>
