@@ -51,13 +51,23 @@ INNOVATION_KEYWORDS = {
 }
 FUN_KEYWORDS = {
     "fun", "game", "terminal", "cli", "visual", "visualization", "creative",
-    "awesome", "toy", "demo", "music", "video", "ui", "desktop", "shell",
+    "awesome", "toy", "demo", "music", "desktop", "shell", "retro", "playground",
 }
-AIGC_KEYWORDS = {
-    "aigc", "comfyui", "diffusion", "stable-diffusion", "sdxl", "flux", "wan",
-    "image-generation", "video-generation", "text-to-image", "text-to-video",
-    "image", "video", "genai", "generative-ai",
+AIGC_TOPICS = {
+    "aigc", "comfyui", "stable-diffusion", "diffusers", "sdxl", "flux", "controlnet",
+    "lora", "text-to-image", "text-to-video", "image-generation", "video-generation",
+    "image-editing", "video-editing", "generative-ai", "image-model", "video-model",
 }
+AIGC_PHRASES = (
+    "comfyui", "stable diffusion", "diffusers", "sdxl", "flux", "controlnet", "lora",
+    "text-to-image", "text to image", "image generation", "generate images", "image editing",
+    "text-to-video", "text to video", "video generation", "generate videos", "video editing",
+    "image model", "video model", "comfyui workflow", "image workflow", "video workflow",
+)
+FUN_STRICT_PHRASES = (
+    "fun", "game", "terminal", "cli", "visual", "retro", "toy", "playground",
+    "music", "desktop pet", "ascii", "shell", "pixel", "animation",
+)
 
 TOPIC_LABELS = {
     "ai": "AI",
@@ -170,8 +180,27 @@ def parse_count(value: str) -> int:
 def extract_keywords(*parts: str) -> tuple[str, ...]:
     text = " ".join(parts).lower()
     tokens = set(re.split(r"[^a-z0-9-]+", text))
-    keywords = sorted((tokens & INNOVATION_KEYWORDS) | (tokens & FUN_KEYWORDS))
+    keywords = sorted((tokens & INNOVATION_KEYWORDS) | (tokens & FUN_KEYWORDS) | (tokens & AIGC_TOPICS))
     return tuple(keywords)
+
+
+def repo_text_parts(repo: Repo | dict[str, Any]) -> tuple[str, set[str]]:
+    if isinstance(repo, Repo):
+        full_name = repo.full_name
+        description = repo.description
+        language = repo.language
+        topics = {topic.lower() for topic in repo.topics}
+    else:
+        full_name = str(repo.get("full_name") or "")
+        description = str(repo.get("description") or "")
+        language = str(repo.get("language") or "")
+        topics = {str(topic).lower() for topic in (repo.get("topics") or ())}
+    text = f"{full_name} {description} {' '.join(sorted(topics))} {language}".lower()
+    return text, topics
+
+
+def count_phrase_hits(text: str, phrases: Iterable[str]) -> int:
+    return sum(1 for phrase in phrases if phrase in text)
 
 
 def fetch_url_text(url: str, retries: int = HTTP_RETRIES) -> str:
@@ -306,14 +335,15 @@ def repo_score(item: dict, now: dt.datetime, hint: str = "") -> float:
     days_since_push = max((now - pushed).total_seconds() / 86400, 0)
     days_since_create = max((now - created).total_seconds() / 86400, 0)
 
-    popularity = math.log10(stars + 1) * 360 + math.log10(forks + 1) * 120 + period_stars * 6
-    recency_boost = max(0, 21 - days_since_push) * 45
-    new_repo_boost = max(0, 45 - days_since_create) * 30
-    trending_boost = 1600 if "trending-daily" in hint else 1000 if "trending-weekly" in hint else 0
-    topics = set(item.get("topics") or ())
-    innovation_boost = 450 if topics & INNOVATION_KEYWORDS else 0
-    fun_boost = 350 if topics & FUN_KEYWORDS else 0
-    return popularity + recency_boost + new_repo_boost + trending_boost + innovation_boost + fun_boost
+    popularity = math.log10(stars + 1) * 320 + math.log10(forks + 1) * 110 + period_stars * 8
+    recency_boost = max(0, 14 - days_since_push) * 65
+    new_repo_boost = max(0, 30 - days_since_create) * 28
+    trending_boost = 2200 if "trending-daily" in hint else 1400 if "trending-weekly" in hint else 0
+    text, topics = repo_text_parts(item)
+    innovation_boost = 320 if topics & INNOVATION_KEYWORDS else 0
+    fun_boost = 240 if topics & FUN_KEYWORDS else 0
+    aigc_boost = 500 if (topics & AIGC_TOPICS or count_phrase_hits(text, AIGC_PHRASES) >= 1) else 0
+    return popularity + recency_boost + new_repo_boost + trending_boost + innovation_boost + fun_boost + aigc_boost
 
 
 def dedupe_and_rank(items: Iterable[tuple[dict, str]], now: dt.datetime) -> list[Repo]:
@@ -345,22 +375,25 @@ def collect_candidates(report_days: int, token: str | None, *, skip_api: bool = 
     if not skip_api:
         innovation_queries = [
             f"created:>={since} stars:>=20",
-            f"pushed:>={since} stars:>=50 topic:ai",
-            f"pushed:>={since} stars:>=50 topic:automation",
-            f"pushed:>={broader_since} stars:>=200 created:>={broader_since}",
+            f"pushed:>={since} stars:>=80 topic:ai",
+            f"pushed:>={since} stars:>=80 topic:automation",
+            f"pushed:>={since} stars:>=80 topic:developer-tools",
+            f"pushed:>={broader_since} stars:>=250 created:>={broader_since}",
         ]
         fun_queries = [
-            f"created:>={since} stars:>=10 topic:fun",
-            f"created:>={since} stars:>=10 topic:game",
-            f"pushed:>={since} stars:>=50 topic:cli",
+            f"created:>={since} stars:>=12 topic:fun",
+            f"created:>={since} stars:>=12 topic:game",
+            f"created:>={since} stars:>=12 topic:terminal",
+            f"pushed:>={since} stars:>=40 topic:cli",
         ]
         aigc_queries = [
             f"pushed:>={since} stars:>=40 topic:comfyui",
             f"pushed:>={since} stars:>=40 topic:stable-diffusion",
+            f"pushed:>={since} stars:>=40 topic:diffusers",
             f"pushed:>={since} stars:>=40 text-to-image",
             f"pushed:>={since} stars:>=40 text-to-video",
-            f"pushed:>={since} stars:>=40 image generation",
-            f"pushed:>={since} stars:>=40 video generation",
+            f"pushed:>={since} stars:>=40 image generation workflow",
+            f"pushed:>={since} stars:>=40 video generation workflow",
         ]
 
         for query in innovation_queries:
@@ -710,27 +743,48 @@ def repo_observations(repo: Repo, section: str) -> list[str]:
 
 
 def is_innovation(repo: Repo) -> bool:
-    text = f"{repo.full_name} {repo.description} {repo.language}".lower()
-    return bool(set(repo.topics) & INNOVATION_KEYWORDS) or any(k in text for k in ("ai", "agent", "llm", "automation", "sandbox", "developer", "workflow", "rust"))
+    text, topics = repo_text_parts(repo)
+    innovation_hits = count_phrase_hits(text, ("ai", "agent", "llm", "automation", "sandbox", "developer", "workflow", "rust"))
+    return bool(topics & INNOVATION_KEYWORDS) or innovation_hits >= 1
 
 
 def is_fun(repo: Repo) -> bool:
-    text = f"{repo.full_name} {repo.description} {repo.language}".lower()
-    return bool(set(repo.topics) & FUN_KEYWORDS) or any(k in text for k in ("game", "fun", "terminal", "cli", "visual", "awesome", "desktop", "ui"))
+    text, topics = repo_text_parts(repo)
+    if is_aigc(repo):
+        return False
+    fun_hits = count_phrase_hits(text, FUN_STRICT_PHRASES)
+    return bool(topics & FUN_KEYWORDS) or fun_hits >= 1
 
 
 def is_aigc(repo: Repo) -> bool:
-    text = f"{repo.full_name} {repo.description} {' '.join(repo.topics)} {repo.language}".lower()
-    topics = {topic.lower() for topic in repo.topics}
-    return bool(topics & AIGC_KEYWORDS) or any(
-        k in text
-        for k in (
-            "aigc", "comfyui", "stable diffusion", "diffusion", "sdxl", "flux", "wan",
-            "text-to-image", "text to image", "image generation", "generate images",
-            "text-to-video", "text to video", "video generation", "generate videos",
-            "image editor", "video editor", "image model", "video model",
-        )
-    )
+    text, topics = repo_text_parts(repo)
+    topic_hits = len(topics & AIGC_TOPICS)
+    phrase_hits = count_phrase_hits(text, AIGC_PHRASES)
+    return topic_hits >= 1 or phrase_hits >= 2 or ("comfyui" in text and phrase_hits >= 1)
+
+
+def hot_rank_score(repo: Repo) -> float:
+    trending_bonus = 2400 if repo.section_hint == "trending-daily" else 1500 if repo.section_hint == "trending-weekly" else 0
+    momentum_bonus = repo.period_stars * 14
+    fresh_bonus = 600 if repo.period_stars >= 80 else 300 if repo.period_stars >= 40 else 0
+    aigc_penalty = 900 if is_aigc(repo) else 0
+    return repo.score + trending_bonus + momentum_bonus + fresh_bonus - aigc_penalty
+
+
+def fun_rank_score(repo: Repo) -> float:
+    text, topics = repo_text_parts(repo)
+    phrase_bonus = count_phrase_hits(text, FUN_STRICT_PHRASES) * 260
+    topic_bonus = len(topics & FUN_KEYWORDS) * 180
+    serious_tool_penalty = 420 if ("infra" in text or "rag" in text or "automation" in text) else 0
+    return repo.score + phrase_bonus + topic_bonus - serious_tool_penalty
+
+
+def aigc_rank_score(repo: Repo) -> float:
+    text, topics = repo_text_parts(repo)
+    phrase_bonus = count_phrase_hits(text, AIGC_PHRASES) * 320
+    topic_bonus = len(topics & AIGC_TOPICS) * 220
+    workflow_bonus = 420 if ("workflow" in text or "comfyui" in text) else 0
+    return repo.score + phrase_bonus + topic_bonus + workflow_bonus
 
 
 def select_reports(innovation: list[Repo], fun: list[Repo], aigc: list[Repo]) -> tuple[list[Repo], list[Repo], list[Repo]]:
@@ -743,18 +797,13 @@ def select_reports(innovation: list[Repo], fun: list[Repo], aigc: list[Repo]) ->
                     best[repo.full_name] = repo
         return sorted(best.values(), key=lambda r: r.score, reverse=True)
 
-    def pick(pool: list[Repo], count: int, used: set[str], fallbacks: list[list[Repo]]) -> list[Repo]:
+    def pick(pool: list[Repo], count: int, used: set[str], fallbacks: list[list[Repo]], predicate=None) -> list[Repo]:
         selected: list[Repo] = []
-        for repo in pool:
-            if repo.full_name in used:
-                continue
-            selected.append(repo)
-            used.add(repo.full_name)
-            if len(selected) >= count:
-                return selected
-        for fallback in fallbacks:
-            for repo in fallback:
+        for source in [pool, *fallbacks]:
+            for repo in source:
                 if repo.full_name in used:
+                    continue
+                if predicate and not predicate(repo):
                     continue
                 selected.append(repo)
                 used.add(repo.full_name)
@@ -762,15 +811,37 @@ def select_reports(innovation: list[Repo], fun: list[Repo], aigc: list[Repo]) ->
                     return selected
         return selected
 
-    innovation_pool = sorted(innovation, key=lambda r: (is_innovation(r), r.score), reverse=True)
-    fun_pool = sorted(fun, key=lambda r: (is_fun(r), r.score), reverse=True)
-    aigc_pool = sorted(aigc, key=lambda r: (is_aigc(r), r.score), reverse=True)
     combined_pool = merge_ranked(innovation, fun, aigc)
+    innovation_pool = sorted(innovation, key=lambda r: (not is_aigc(r), hot_rank_score(r), is_innovation(r)), reverse=True)
+    fun_pool = sorted(fun, key=lambda r: (is_fun(r), fun_rank_score(r)), reverse=True)
+    aigc_pool = sorted(aigc, key=lambda r: (is_aigc(r), aigc_rank_score(r)), reverse=True)
 
     used: set[str] = set()
-    innovation_selected = pick(innovation_pool, 5, used, [combined_pool])
-    fun_selected = pick(fun_pool, 2, used, [combined_pool])
-    aigc_selected = pick(aigc_pool, 2, used, [combined_pool])
+    aigc_selected = pick(aigc_pool, 2, used, [combined_pool], predicate=is_aigc)
+    fun_selected = pick(fun_pool, 2, used, [combined_pool], predicate=is_fun)
+    innovation_selected = pick(
+        innovation_pool,
+        5,
+        used,
+        [combined_pool],
+        predicate=lambda repo: is_innovation(repo) and not is_aigc(repo),
+    )
+
+    if len(innovation_selected) < 5:
+        innovation_selected = innovation_selected + pick(
+            combined_pool,
+            5 - len(innovation_selected),
+            used,
+            [],
+            predicate=lambda repo: not is_aigc(repo),
+        )
+
+    if len(fun_selected) < 2:
+        fun_selected = fun_selected + pick(combined_pool, 2 - len(fun_selected), used, [], predicate=lambda repo: not is_aigc(repo))
+
+    if len(aigc_selected) < 2:
+        aigc_selected = aigc_selected + pick(combined_pool, 2 - len(aigc_selected), used, [], predicate=is_aigc)
+
     return innovation_selected[:5], fun_selected[:2], aigc_selected[:2]
 
 
