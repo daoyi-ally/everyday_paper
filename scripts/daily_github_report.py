@@ -41,7 +41,7 @@ HTTP_TIMEOUT_SECONDS = 12
 HTTP_RETRIES = 2
 KIMI_CHAT_COMPLETIONS_URL = "https://api.moonshot.ai/v1/chat/completions"
 DEFAULT_KIMI_PROMPT_CACHE_PREFIX = "github-daily-digest"
-DEFAULT_KIMI_MODEL = "kimi-k2.7-code"
+DEFAULT_KIMI_MODEL = "kimi-k2.6"
 DEFAULT_KIMI_MAX_TOKENS = 4096
 
 INNOVATION_KEYWORDS = {
@@ -609,13 +609,10 @@ def generate_repo_insights(repos: list[Repo], repo_sections: dict[str, str]) -> 
     api_key = os.getenv("MOONSHOT_API_KEY", "").strip()
     if not api_key:
         print("INFO: MOONSHOT_API_KEY not set; using fallback Chinese copy.", file=sys.stderr)
-        return {}, ""
+        return {}, "Kimi \u672a\u914d\u7f6e API Key\uff08\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
     model = os.getenv("KIMI_MODEL", DEFAULT_KIMI_MODEL).strip() or DEFAULT_KIMI_MODEL
     max_tokens = int(os.getenv("KIMI_MAX_TOKENS") or str(DEFAULT_KIMI_MAX_TOKENS))
     prompt = build_kimi_repo_prompt(repos, repo_sections)
-    prompt_cache_key = os.getenv("KIMI_PROMPT_CACHE_KEY", "").strip()
-    if not prompt_cache_key:
-        prompt_cache_key = f"{DEFAULT_KIMI_PROMPT_CACHE_PREFIX}:{dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime('%Y-%m-%d')}"
     body = {
         "model": model,
         "messages": [
@@ -625,10 +622,7 @@ def generate_repo_insights(repos: list[Repo], repo_sections: dict[str, str]) -> 
             },
             {"role": "user", "content": prompt},
         ],
-        "response_format": {"type": "json_object"},
-        "thinking": {"type": "disabled"},
         "max_tokens": max_tokens,
-        "prompt_cache_key": prompt_cache_key,
     }
     request = urllib.request.Request(
         os.getenv("KIMI_CHAT_COMPLETIONS_URL", KIMI_CHAT_COMPLETIONS_URL).strip() or KIMI_CHAT_COMPLETIONS_URL,
@@ -645,27 +639,28 @@ def generate_repo_insights(repos: list[Repo], repo_sections: dict[str, str]) -> 
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else str(exc)
-        print(f"WARN: Kimi request failed ({exc.code}): {details[:300]}", file=sys.stderr)
-        return {}, ""
+        details = normalize_text(details)[:240]
+        print(f"WARN: Kimi request failed ({exc.code}): {details}", file=sys.stderr)
+        return {}, f"Kimi \u8c03\u7528\u5931\u8d25\uff08HTTP {exc.code}\uff0c\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
     except Exception as exc:
         print(f"WARN: Kimi request failed: {exc}", file=sys.stderr)
-        return {}, ""
+        return {}, f"Kimi \u8c03\u7528\u5931\u8d25\uff08{truncate(str(exc), 60)}\uff0c\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
 
     choices = payload.get("choices") or []
     if not choices:
         print("WARN: Kimi returned no choices; using fallback Chinese copy.", file=sys.stderr)
-        return {}, ""
+        return {}, "Kimi \u8fd4\u56de\u7a7a\u7ed3\u679c\uff08\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
 
     raw_content = message_text((choices[0].get("message") or {}).get("content"))
     if not raw_content:
         print("WARN: Kimi returned empty content; using fallback Chinese copy.", file=sys.stderr)
-        return {}, ""
+        return {}, "Kimi \u8fd4\u56de\u7a7a\u5185\u5bb9\uff08\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
 
     try:
         parsed = json.loads(extract_json_object(raw_content))
     except Exception as exc:
         print(f"WARN: Kimi JSON parse failed: {exc}", file=sys.stderr)
-        return {}, ""
+        return {}, "Kimi \u8fd4\u56de\u5185\u5bb9\u65e0\u6cd5\u89e3\u6790\uff08\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
 
     expected = {repo.full_name for repo in repos}
     insights: dict[str, RepoInsight] = {}
@@ -687,7 +682,7 @@ def generate_repo_insights(repos: list[Repo], repo_sections: dict[str, str]) -> 
 
     if not insights:
         print("WARN: Kimi returned no usable repo insights; using fallback Chinese copy.", file=sys.stderr)
-        return {}, ""
+        return {}, "Kimi \u672a\u8fd4\u56de\u53ef\u7528\u7ed3\u679c\uff08\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
 
     print(f"INFO: Kimi generated Chinese insights for {len(insights)}/{len(repos)} repos.", file=sys.stderr)
     return insights, f"Kimi\uff08{model}\uff09"
