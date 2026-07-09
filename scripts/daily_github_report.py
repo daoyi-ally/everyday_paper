@@ -40,7 +40,8 @@ DEFAULT_REPORT_DAYS = 7
 HTTP_TIMEOUT_SECONDS = 12
 HTTP_RETRIES = 2
 KIMI_CHAT_COMPLETIONS_URL = "https://api.moonshot.ai/v1/chat/completions"
-DEFAULT_KIMI_MODEL = "kimi-k2.6"
+DEFAULT_KIMI_PROMPT_CACHE_PREFIX = "github-daily-digest"
+DEFAULT_KIMI_MODEL = "kimi-k2.7-code"
 DEFAULT_KIMI_MAX_TOKENS = 4096
 
 INNOVATION_KEYWORDS = {
@@ -51,6 +52,11 @@ INNOVATION_KEYWORDS = {
 FUN_KEYWORDS = {
     "fun", "game", "terminal", "cli", "visual", "visualization", "creative",
     "awesome", "toy", "demo", "music", "video", "ui", "desktop", "shell",
+}
+AIGC_KEYWORDS = {
+    "aigc", "comfyui", "diffusion", "stable-diffusion", "sdxl", "flux", "wan",
+    "image-generation", "video-generation", "text-to-image", "text-to-video",
+    "image", "video", "genai", "generative-ai",
 }
 
 TOPIC_LABELS = {
@@ -326,7 +332,7 @@ def dedupe_and_rank(items: Iterable[tuple[dict, str]], now: dt.datetime) -> list
     return sorted(best.values(), key=lambda r: r.score, reverse=True)
 
 
-def collect_candidates(report_days: int, token: str | None, *, skip_api: bool = False) -> tuple[list[Repo], list[Repo]]:
+def collect_candidates(report_days: int, token: str | None, *, skip_api: bool = False) -> tuple[list[Repo], list[Repo], list[Repo]]:
     now = dt.datetime.now(dt.timezone.utc)
     since = (now - dt.timedelta(days=report_days)).date().isoformat()
     broader_since = (now - dt.timedelta(days=max(report_days, 14))).date().isoformat()
@@ -334,6 +340,7 @@ def collect_candidates(report_days: int, token: str | None, *, skip_api: bool = 
     trending_items = fetch_trending_repositories()
     innovation_items: list[tuple[dict, str]] = list(trending_items)
     fun_items: list[tuple[dict, str]] = list(trending_items)
+    aigc_items: list[tuple[dict, str]] = list(trending_items)
 
     if not skip_api:
         innovation_queries = [
@@ -346,6 +353,14 @@ def collect_candidates(report_days: int, token: str | None, *, skip_api: bool = 
             f"created:>={since} stars:>=10 topic:fun",
             f"created:>={since} stars:>=10 topic:game",
             f"pushed:>={since} stars:>=50 topic:cli",
+        ]
+        aigc_queries = [
+            f"pushed:>={since} stars:>=40 topic:comfyui",
+            f"pushed:>={since} stars:>=40 topic:stable-diffusion",
+            f"pushed:>={since} stars:>=40 text-to-image",
+            f"pushed:>={since} stars:>=40 text-to-video",
+            f"pushed:>={since} stars:>=40 image generation",
+            f"pushed:>={since} stars:>=40 video generation",
         ]
 
         for query in innovation_queries:
@@ -360,8 +375,13 @@ def collect_candidates(report_days: int, token: str | None, *, skip_api: bool = 
             except Exception as exc:
                 print(f"WARN: fun query failed: {query}: {exc}", file=sys.stderr)
 
-    return dedupe_and_rank(innovation_items, now), dedupe_and_rank(fun_items, now)
+        for query in aigc_queries:
+            try:
+                aigc_items.extend((item, query) for item in search_repositories(query, token, per_page=5))
+            except Exception as exc:
+                print(f"WARN: AIGC query failed: {query}: {exc}", file=sys.stderr)
 
+    return dedupe_and_rank(innovation_items, now), dedupe_and_rank(fun_items, now), dedupe_and_rank(aigc_items, now)
 
 def truncate(value: str, length: int = 180) -> str:
     value = re.sub(r"\s+", " ", value or "").strip()
@@ -415,6 +435,11 @@ def infer_repo_purpose(repo: Repo, section: str) -> str:
         (("system prompts", "prompt leaks"), "用于整理和收集主流 AI 产品系统提示词的资料仓库"),
         (("system prompts", "extracted"), "用于整理和收集主流 AI 产品系统提示词的资料仓库"),
         (("design system", "agent ready"), "用于构建可定制界面组件和设计规范的开源设计系统"),
+        (("comfyui",), "用于搭建生图、生视频和多模型工作流的可视化 AIGC 编排工具"),
+        (("text-to-image",), "用于根据文本生成图片的 AIGC 项目"),
+        (("text-to-video",), "用于根据文本生成视频的 AIGC 项目"),
+        (("image generation",), "用于生成或编辑图片内容的 AIGC 项目"),
+        (("video generation",), "用于生成视频内容的 AIGC 项目"),
         (("gateway", "providers"), "用于统一接入多个 AI 模型提供商的聚合网关"),
         (("multiplexer", "terminal"), "用于在终端里统一调度或切换多个智能体的工具"),
         (("gui agent", "web interfaces"), "用于通过自然语言控制网页界面的页面智能体"),
@@ -492,7 +517,7 @@ def build_kimi_repo_prompt(repos: list[Repo], repo_sections: dict[str, str]) -> 
         payload.append(
             {
                 "full_name": repo.full_name,
-                "section": "innovation" if repo_sections.get(repo.full_name) == "innovation" else "fun",
+                "section": repo_sections.get(repo.full_name, "fun"),
                 "html_url": repo.html_url,
                 "description": repo.description,
                 "language": repo.language,
@@ -511,12 +536,12 @@ def build_kimi_repo_prompt(repos: list[Repo], repo_sections: dict[str, str]) -> 
 
         Requirements:
         1. Return exactly one JSON object with the top-level shape {{"repos": [...]}}.
-        2. Each item in repos must contain full_name, intro_zh, and reason_zh.
+        2. Each item in repos must contain full_name and intro_zh.
         3. Keep full_name exactly the same as the input and cover every repository.
         4. intro_zh must be 1-2 sentences in Simplified Chinese, about 40-90 Chinese characters.
         5. The FIRST sentence of intro_zh must directly explain what the project does in plain Chinese, such as "用于整理系统提示词的资料仓库" or "用于会议转写和总结的本地助手".
         6. Do NOT start intro_zh with language, tech stack, topics, or vague category labels like "一个 AI 项目" or "基于 TypeScript".
-        7. reason_zh must be 1 sentence in Simplified Chinese, about 25-60 Chinese characters, highlighting the near-term reason to pay attention.
+        7. Do not add reason_zh, recommendation fields, or any extra keys.
         8. Do not invent README details, benchmarks, customer stories, author background, or unsupported technical claims.
         9. No Markdown. No extra explanation. JSON object only.
 
@@ -525,8 +550,7 @@ def build_kimi_repo_prompt(repos: list[Repo], repo_sections: dict[str, str]) -> 
           "repos": [
             {{
               "full_name": "owner/repo",
-              "intro_zh": "这个项目用于统一接入多个模型提供商，帮助开发者用一个接口切换不同 AI 服务。近期热度上升较快，适合先看它的接入方式和使用门槛。",
-              "reason_zh": "近 7 天关注度明显上升，值得看看它是否能减少多模型接入成本。"
+              "intro_zh": "这个项目用于统一接入多个模型提供商，帮助开发者用一个接口切换不同 AI 服务。近期热度上升较快，适合先看它的接入方式和使用门槛。"
             }}
           ]
         }}
@@ -542,10 +566,12 @@ def generate_repo_insights(repos: list[Repo], repo_sections: dict[str, str]) -> 
     if not api_key:
         print("INFO: MOONSHOT_API_KEY not set; using fallback Chinese copy.", file=sys.stderr)
         return {}, ""
-
     model = os.getenv("KIMI_MODEL", DEFAULT_KIMI_MODEL).strip() or DEFAULT_KIMI_MODEL
     max_tokens = int(os.getenv("KIMI_MAX_TOKENS") or str(DEFAULT_KIMI_MAX_TOKENS))
     prompt = build_kimi_repo_prompt(repos, repo_sections)
+    prompt_cache_key = os.getenv("KIMI_PROMPT_CACHE_KEY", "").strip()
+    if not prompt_cache_key:
+        prompt_cache_key = f"{DEFAULT_KIMI_PROMPT_CACHE_PREFIX}:{dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime('%Y-%m-%d')}"
     body = {
         "model": model,
         "messages": [
@@ -558,9 +584,10 @@ def generate_repo_insights(repos: list[Repo], repo_sections: dict[str, str]) -> 
         "response_format": {"type": "json_object"},
         "thinking": {"type": "disabled"},
         "max_tokens": max_tokens,
+        "prompt_cache_key": prompt_cache_key,
     }
     request = urllib.request.Request(
-        KIMI_CHAT_COMPLETIONS_URL,
+        os.getenv("KIMI_CHAT_COMPLETIONS_URL", KIMI_CHAT_COMPLETIONS_URL).strip() or KIMI_CHAT_COMPLETIONS_URL,
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -625,18 +652,24 @@ def generate_repo_insights(repos: list[Repo], repo_sections: dict[str, str]) -> 
 def section_meta(section: str) -> dict[str, str]:
     if section == "innovation":
         return {
-            "label": "\u6280\u672f\u521b\u65b0",
+            "label": "热点项目",
             "accent": "#0969da",
             "soft": "#ddf4ff",
             "border": "#b6e3ff",
         }
+    if section == "aigc":
+        return {
+            "label": "AIGC 项目",
+            "accent": "#bc4c00",
+            "soft": "#fff1e5",
+            "border": "#ffd8b5",
+        }
     return {
-        "label": "\u6709\u8da3\u9879\u76ee",
+        "label": "有趣项目",
         "accent": "#8250df",
         "soft": "#fbefff",
         "border": "#e9d8fd",
     }
-
 
 def purpose_focus(repo: Repo, section: str) -> str:
     purpose = infer_repo_purpose(repo, section)
@@ -686,55 +719,70 @@ def is_fun(repo: Repo) -> bool:
     return bool(set(repo.topics) & FUN_KEYWORDS) or any(k in text for k in ("game", "fun", "terminal", "cli", "visual", "awesome", "desktop", "ui"))
 
 
-def select_reports(innovation: list[Repo], fun: list[Repo]) -> tuple[list[Repo], list[Repo]]:
+def is_aigc(repo: Repo) -> bool:
+    text = f"{repo.full_name} {repo.description} {' '.join(repo.topics)} {repo.language}".lower()
+    topics = {topic.lower() for topic in repo.topics}
+    return bool(topics & AIGC_KEYWORDS) or any(
+        k in text
+        for k in (
+            "aigc", "comfyui", "stable diffusion", "diffusion", "sdxl", "flux", "wan",
+            "text-to-image", "text to image", "image generation", "generate images",
+            "text-to-video", "text to video", "video generation", "generate videos",
+            "image editor", "video editor", "image model", "video model",
+        )
+    )
+
+
+def select_reports(innovation: list[Repo], fun: list[Repo], aigc: list[Repo]) -> tuple[list[Repo], list[Repo], list[Repo]]:
+    def merge_ranked(*groups: list[Repo]) -> list[Repo]:
+        best: dict[str, Repo] = {}
+        for group in groups:
+            for repo in group:
+                existing = best.get(repo.full_name)
+                if existing is None or repo.score > existing.score:
+                    best[repo.full_name] = repo
+        return sorted(best.values(), key=lambda r: r.score, reverse=True)
+
+    def pick(pool: list[Repo], count: int, used: set[str], fallbacks: list[list[Repo]]) -> list[Repo]:
+        selected: list[Repo] = []
+        for repo in pool:
+            if repo.full_name in used:
+                continue
+            selected.append(repo)
+            used.add(repo.full_name)
+            if len(selected) >= count:
+                return selected
+        for fallback in fallbacks:
+            for repo in fallback:
+                if repo.full_name in used:
+                    continue
+                selected.append(repo)
+                used.add(repo.full_name)
+                if len(selected) >= count:
+                    return selected
+        return selected
+
     innovation_pool = sorted(innovation, key=lambda r: (is_innovation(r), r.score), reverse=True)
-    innovation_selected = innovation_pool[:5]
-    used = {repo.full_name for repo in innovation_selected}
+    fun_pool = sorted(fun, key=lambda r: (is_fun(r), r.score), reverse=True)
+    aigc_pool = sorted(aigc, key=lambda r: (is_aigc(r), r.score), reverse=True)
+    combined_pool = merge_ranked(innovation, fun, aigc)
 
-    fun_pool = sorted((repo for repo in fun if repo.full_name not in used), key=lambda r: (is_fun(r), r.score), reverse=True)
-    fun_selected = fun_pool[:3]
-    used.update(repo.full_name for repo in fun_selected)
-
-    if len(innovation_selected) < 5:
-        for repo in innovation + fun:
-            if repo.full_name not in used:
-                innovation_selected.append(repo)
-                used.add(repo.full_name)
-            if len(innovation_selected) >= 5:
-                break
-    if len(fun_selected) < 3:
-        for repo in fun + innovation:
-            if repo.full_name not in used:
-                fun_selected.append(repo)
-                used.add(repo.full_name)
-            if len(fun_selected) >= 3:
-                break
-    return innovation_selected[:5], fun_selected[:3]
+    used: set[str] = set()
+    innovation_selected = pick(innovation_pool, 5, used, [combined_pool])
+    fun_selected = pick(fun_pool, 2, used, [combined_pool])
+    aigc_selected = pick(aigc_pool, 2, used, [combined_pool])
+    return innovation_selected[:5], fun_selected[:2], aigc_selected[:2]
 
 
 def plain_repo_block(index: int, repo: Repo, section: str, repo_insights: dict[str, RepoInsight] | None = None) -> str:
-    topics = ", ".join(topic_display(t) for t in repo.topics[:8]) if repo.topics else "\u65e0"
-    period = f" | \u672c\u671f\u65b0\u589e Stars: {repo.period_stars:,}" if repo.period_stars else ""
-    observations = "\n".join(f"   - {item}" for item in repo_observations(repo, section))
     intro_text = repo_intro(repo, section, repo_insights)
-    reason_text = repo_reason_text(repo, section, repo_insights)
-    intro_source = repo_intro_source(repo, repo_insights)
     return textwrap.dedent(
         f"""
         {index}. {repo.full_name}
            GitHub: {repo.html_url}
-           \u4e2d\u6587\u5bfc\u8bfb: {intro_text}
-           \u5bfc\u8bfb\u6765\u6e90: {intro_source}
-           \u539f\u59cb\u7b80\u4ecb: {truncate(repo.description)}
-           \u8bed\u8a00: {repo.language} | Stars: {repo.stargazers_count:,} | Forks: {repo.forks_count:,}{period}
-           \u521b\u5efa: {format_date(repo.created_at)} | \u6700\u8fd1\u66f4\u65b0: {format_date(repo.pushed_at or repo.updated_at)}
-           Topics/\u5173\u952e\u8bcd: {topics}
-           \u63a8\u8350\u7406\u7531: {reason_text}
-           \u5feb\u901f\u89c2\u5bdf:
-        {observations}
+           中文简介: {intro_text}
         """
     ).strip()
-
 
 def html_badge(text: str, *, fg: str = "#57606a", bg: str = "#f6f8fa", border: str = "#d0d7de") -> str:
     return (
@@ -745,31 +793,11 @@ def html_badge(text: str, *, fg: str = "#57606a", bg: str = "#f6f8fa", border: s
 
 def html_repo_block(index: int, repo: Repo, section: str, repo_insights: dict[str, RepoInsight] | None = None) -> str:
     meta = section_meta(section)
-    topics = "".join(html_badge(topic_display(t), fg=meta["accent"], bg=meta["soft"], border=meta["border"]) for t in repo.topics[:6])
-    if not topics:
-        topics = html_badge("\u6682\u65e0\u5173\u952e\u8bcd")
-    insight = (repo_insights or {}).get(repo.full_name)
     intro_text = repo_intro(repo, section, repo_insights)
-    reason_text = repo_reason_text(repo, section, repo_insights)
-    intro_source = "Kimi \u4e2d\u6587\u5bfc\u8bfb" if insight and insight.intro_zh else "\u89c4\u5219\u515c\u5e95\u5bfc\u8bfb"
-    stat_badges = "".join(
-        [
-            html_badge(f"\u8bed\u8a00 {repo.language}"),
-            html_badge(f"Stars {repo.stargazers_count:,}"),
-            html_badge(f"Forks {repo.forks_count:,}"),
-            html_badge(f"\u6700\u8fd1\u66f4\u65b0 {format_date(repo.pushed_at or repo.updated_at)}"),
-            html_badge(intro_source, fg="#0550ae", bg="#ddf4ff", border="#b6e3ff") if insight and insight.intro_zh else html_badge(intro_source),
-        ]
-    )
-    if repo.period_stars:
-        stat_badges += html_badge(f"\u672c\u671f\u65b0\u589e {repo.period_stars:,} \u661f", fg="#1a7f37", bg="#dafbe1", border="#aceebb")
-    observation_items = "".join(
-        f'<li style="margin:0 0 6px;">{html.escape(item)}</li>' for item in repo_observations(repo, section)
-    )
     return f"""
     <tr>
       <td style="padding:0 0 16px;">
-        <div style="border:1px solid #d8dee4;border-radius:16px;padding:18px 18px 14px;background:#ffffff;box-shadow:0 1px 0 rgba(27,31,36,0.04);">
+        <div style="border:1px solid #d8dee4;border-radius:16px;padding:18px;background:#ffffff;box-shadow:0 1px 0 rgba(27,31,36,0.04);">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
             <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
               <span style="display:inline-block;min-width:34px;height:34px;line-height:34px;text-align:center;border-radius:999px;background:{meta['soft']};color:{meta['accent']};font-weight:700;">{index}</span>
@@ -780,32 +808,21 @@ def html_repo_block(index: int, repo: Repo, section: str, repo_insights: dict[st
                 <div style="margin-top:4px;">{html_badge(meta['label'], fg=meta['accent'], bg=meta['soft'], border=meta['border'])}</div>
               </div>
             </div>
+            <div>{html_badge(f'Stars {repo.stargazers_count:,}')}</div>
           </div>
           <div style="margin-top:12px;padding:14px 16px;border-radius:14px;background:#f8fbff;border:1px solid #dbeafe;color:#0f172a;line-height:1.82;font-size:14px;">
-            <div style="font-size:13px;font-weight:700;color:#0550ae;margin-bottom:6px;">\u4e2d\u6587\u5bfc\u8bfb</div>
+            <div style="font-size:13px;font-weight:700;color:#0550ae;margin-bottom:6px;">中文简介</div>
             <div>{html.escape(intro_text)}</div>
-          </div>
-          <div style="margin-top:12px;color:#57606a;line-height:1.75;font-size:13px;">
-            <strong>\u539f\u59cb\u7b80\u4ecb\uff1a</strong>{html.escape(truncate(repo.description, 220))}
-          </div>
-          <div style="margin-top:14px;">{stat_badges}</div>
-          <div style="margin-top:6px;">{topics}</div>
-          <div style="margin-top:14px;padding:12px 14px;border-radius:12px;background:#f6f8fa;color:#1f2328;line-height:1.72;">
-            <strong>\u63a8\u8350\u7406\u7531\uff1a</strong>{html.escape(reason_text)}
-          </div>
-          <div style="margin-top:12px;padding:12px 14px;border-radius:12px;background:#fafbfc;border:1px dashed #d0d7de;">
-            <div style="font-size:13px;font-weight:700;color:#57606a;margin-bottom:8px;">\u5feb\u901f\u89c2\u5bdf</div>
-            <ul style="margin:0;padding-left:18px;color:#24292f;line-height:1.68;">{observation_items}</ul>
           </div>
         </div>
       </td>
     </tr>
     """
 
-
 def build_report(
     innovation: list[Repo],
     fun: list[Repo],
+    aigc: list[Repo],
     report_days: int,
     source_text: str = "GitHub Trending + GitHub Search API",
     repo_insights: dict[str, RepoInsight] | None = None,
@@ -814,42 +831,60 @@ def build_report(
     now_cn = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
     today_cn = now_cn.strftime("%Y-%m-%d")
     generated_at = now_cn.strftime("%Y-%m-%d %H:%M")
-    subject = f"\u6bcf\u65e5 GitHub \u70ed\u70b9\u9879\u76ee\u7b80\u62a5 - {today_cn}"
+    subject = f"每日 GitHub 9 项目简报 - {today_cn}"
 
-    all_repos = innovation + fun
-    ai_text = ai_provider or "\u672a\u542f\u7528 AI \uff08\u4f7f\u7528\u89c4\u5219\u515c\u5e95\u5bfc\u8bfb\uff09"
+    all_repos = innovation + fun + aigc
+    ai_text = ai_provider or "未启用 AI（使用规则兜底导读）"
     summary_lines = [
-        f"\u751f\u6210\u65f6\u95f4\uff1a{generated_at}\uff08\u5317\u4eac\u65f6\u95f4\uff09",
-        f"\u7edf\u8ba1\u7a97\u53e3\uff1a\u6700\u8fd1\u7ea6 {report_days} \u5929",
-        f"\u6570\u636e\u6765\u6e90\uff1a{source_text}",
-        f"AI \u4e2d\u6587\u5bfc\u8bfb\uff1a{ai_text}",
-        f"\u8bed\u8a00\u70ed\u70b9\uff1a{top_languages(all_repos)}",
+        f"生成时间：{generated_at}（北京时间）",
+        f"统计窗口：最近约 {report_days} 天",
+        f"数据来源：{source_text}",
+        f"AI 中文导读：{ai_text}",
+        f"项目结构：热点 5 个 + 有趣 2 个 + AIGC 2 个",
+        f"语言热点：{top_languages(all_repos)}",
     ]
 
-    plain_parts = [subject, "", "\u4eca\u65e5\u6982\u89c8", *summary_lines, "", "\u4e00\u3001\u6280\u672f\u521b\u65b0\u9879\u76ee Top 5"]
+    summary_repos = [("热点", repo, "innovation") for repo in innovation]
+    summary_repos += [("有趣", repo, "fun") for repo in fun]
+    summary_repos += [("AIGC", repo, "aigc") for repo in aigc]
+
+    plain_parts = [subject, "", "今日概览", *summary_lines, "", "零、今日 9 个项目清单"]
+    for index, (label, repo, section) in enumerate(summary_repos, 1):
+        plain_parts.append(f"{index}. [{label}] {repo.full_name}")
+        plain_parts.append(f"   中文简介: {repo_intro(repo, section, repo_insights)}")
+    plain_parts.extend(["", "一、五个热点项目"])
     plain_parts.extend(plain_repo_block(i, repo, "innovation", repo_insights) for i, repo in enumerate(innovation, 1))
-    plain_parts.extend(["", "\u4e8c\u3001\u6709\u8da3\u9879\u76ee Top 3"])
+    plain_parts.extend(["", "二、两个有趣的项目"])
     plain_parts.extend(plain_repo_block(i, repo, "fun", repo_insights) for i, repo in enumerate(fun, 1))
-    plain_parts.extend(
-        [
-            "",
-            "\u4e09\u3001\u9605\u8bfb\u5efa\u8bae",
-            "- \u5efa\u8bae\u5148\u770b\u6bcf\u4e2a\u9879\u76ee\u7684\u201c\u4e2d\u6587\u5bfc\u8bfb\u201d\u548c\u201c\u63a8\u8350\u7406\u7531\u201d\uff0c\u518d\u51b3\u5b9a\u662f\u5426\u8fdb\u5165 README \u6df1\u8bfb\u3002",
-            "- \u6280\u672f\u521b\u65b0\u7c7b\u4ed3\u5e93\u9002\u5408\u91cd\u70b9\u67e5\u770b README\u3001\u67b6\u6784\u8bf4\u660e\u3001Demo \u548c\u793e\u533a\u7ef4\u62a4\u60c5\u51b5\u3002",
-            "- \u6709\u8da3\u9879\u76ee\u9002\u5408\u5feb\u901f\u4f53\u9a8c\u4ea4\u4e92\u8bbe\u8ba1\u3001\u7ec8\u7aef\u73a9\u6cd5\u3001\u6548\u7387\u5de5\u5177\u6216\u521b\u610f\u8868\u8fbe\u3002",
-        ]
-    )
-    plain_text = "\n\n".join(plain_parts)
+    plain_parts.extend(["", "三、两个 AIGC 项目（生图 / 生视频 / AIGC）"])
+    plain_parts.extend(plain_repo_block(i, repo, "aigc", repo_insights) for i, repo in enumerate(aigc, 1))
+    plain_text = "\n".join(plain_parts)
 
     innovation_rows = "".join(html_repo_block(i, repo, "innovation", repo_insights) for i, repo in enumerate(innovation, 1))
     fun_rows = "".join(html_repo_block(i, repo, "fun", repo_insights) for i, repo in enumerate(fun, 1))
+    aigc_rows = "".join(html_repo_block(i, repo, "aigc", repo_insights) for i, repo in enumerate(aigc, 1))
+
+    summary_items = "".join(
+        f"""
+        <tr>
+          <td style="padding:0 0 12px;">
+            <div style="border:1px solid #d8dee4;border-radius:14px;padding:14px 16px;background:#ffffff;">
+              <div style="font-size:15px;font-weight:700;color:#0f172a;">{idx}. [{html.escape(label)}] <a href="{html.escape(repo.html_url)}" style="color:#0f172a;text-decoration:none;">{html.escape(repo.full_name)}</a></div>
+              <div style="margin-top:8px;color:#334155;line-height:1.8;">{html.escape(repo_intro(repo, section, repo_insights))}</div>
+            </div>
+          </td>
+        </tr>
+        """
+        for idx, (label, repo, section) in enumerate(summary_repos, 1)
+    )
+
     overview_badges = "".join(
         [
-            html_badge("5 \u4e2a\u6280\u672f\u521b\u65b0\u9879\u76ee", fg="#0969da", bg="#ddf4ff", border="#b6e3ff"),
-            html_badge("3 \u4e2a\u6709\u8da3\u9879\u76ee", fg="#8250df", bg="#fbefff", border="#e9d8fd"),
-            html_badge(f"\u6700\u8fd1 {report_days} \u5929", fg="#1f2328", bg="#f6f8fa", border="#d0d7de"),
-            html_badge(f"\u8bed\u8a00\u70ed\u70b9\uff1a{top_languages(all_repos)}", fg="#1a7f37", bg="#dafbe1", border="#aceebb"),
-            html_badge(f"AI \u5bfc\u8bfb\uff1a{ai_provider}" if ai_provider else "AI \u5bfc\u8bfb\uff1a\u672a\u542f\u7528", fg="#0550ae", bg="#ddf4ff", border="#b6e3ff"),
+            html_badge(f"近 {report_days} 天", fg="#ffffff", bg="rgba(255,255,255,0.14)", border="rgba(255,255,255,0.22)"),
+            html_badge("9 个项目", fg="#ffffff", bg="rgba(255,255,255,0.14)", border="rgba(255,255,255,0.22)"),
+            html_badge("热点 5 + 有趣 2 + AIGC 2", fg="#ffffff", bg="rgba(255,255,255,0.14)", border="rgba(255,255,255,0.22)"),
+            html_badge(f"语言热点：{top_languages(all_repos)}", fg="#1a7f37", bg="#dafbe1", border="#aceebb"),
+            html_badge(f"AI 导读：{ai_provider}" if ai_provider else "AI 导读：未启用", fg="#0550ae", bg="#ddf4ff", border="#b6e3ff"),
         ]
     )
     html_text = f"""
@@ -865,51 +900,47 @@ def build_report(
         <div style="background:linear-gradient(135deg,#0f172a 0%,#1d4ed8 100%);border-radius:22px;padding:28px 28px 24px;color:#ffffff;box-shadow:0 10px 30px rgba(15,23,42,0.18);">
           <div style="font-size:13px;opacity:0.88;letter-spacing:0.02em;">GitHub Daily Digest</div>
           <h1 style="margin:10px 0 10px;font-size:28px;line-height:1.25;">{html.escape(subject)}</h1>
-          <p style="margin:0 0 14px;font-size:15px;line-height:1.8;color:rgba(255,255,255,0.92);">\u4e3a\u4f60\u7b5b\u9009\u8fd1\u671f\u503c\u5f97\u5173\u6ce8\u7684 GitHub \u70ed\u70b9\u4ed3\u5e93\uff0c\u517c\u987e\u6280\u672f\u521b\u65b0\u4ef7\u503c\u4e0e\u6709\u8da3\u53ef\u73a9\u7684\u9879\u76ee\u7075\u611f\uff0c\u65b9\u4fbf\u6bcf\u5929\u7528 3 \u5230 5 \u5206\u949f\u5b8c\u6210\u9ad8\u8d28\u91cf\u6d4f\u89c8\u3002</p>
+          <p style="margin:0 0 14px;font-size:15px;line-height:1.8;color:rgba(255,255,255,0.92);">今天为你整理 9 个值得浏览的 GitHub 项目：5 个热点项目、2 个有趣项目、2 个 AIGC 项目。顶部先看清单，再按分类查看详情。</p>
           <div>{overview_badges}</div>
         </div>
 
         <div style="background:#ffffff;border:1px solid #d8dee4;border-radius:18px;padding:22px 24px;margin-top:18px;">
-          <h2 style="margin:0 0 14px;font-size:20px;color:#0f172a;">\u4eca\u65e5\u6982\u89c8</h2>
+          <h2 style="margin:0 0 14px;font-size:20px;color:#0f172a;">今日概览</h2>
           <div style="padding:12px 14px;background:#f6f8fa;border-radius:12px;color:#1f2328;line-height:1.8;">
-            <div><strong>\u751f\u6210\u65f6\u95f4\uff1a</strong>{generated_at}\uff08\u5317\u4eac\u65f6\u95f4\uff09</div>
-            <div><strong>\u7edf\u8ba1\u7a97\u53e3\uff1a</strong>\u6700\u8fd1\u7ea6 {report_days} \u5929</div>
-            <div><strong>\u6570\u636e\u6765\u6e90\uff1a</strong>{html.escape(source_text)}</div>
-            <div><strong>AI \u4e2d\u6587\u5bfc\u8bfb\uff1a</strong>{html.escape(ai_text)}</div>
-            <div><strong>\u8bed\u8a00\u70ed\u70b9\uff1a</strong>{html.escape(top_languages(all_repos))}</div>
+            <div><strong>生成时间：</strong>{generated_at}（北京时间）</div>
+            <div><strong>统计窗口：</strong>最近约 {report_days} 天</div>
+            <div><strong>数据来源：</strong>{html.escape(source_text)}</div>
+            <div><strong>AI 中文导读：</strong>{html.escape(ai_text)}</div>
+            <div><strong>项目结构：</strong>热点 5 个 + 有趣 2 个 + AIGC 2 个</div>
+            <div><strong>语言热点：</strong>{html.escape(top_languages(all_repos))}</div>
           </div>
-          <ul style="margin:16px 0 0;padding-left:20px;line-height:1.8;color:#24292f;">
-            <li>\u5efa\u8bae\u5148\u770b\u6bcf\u4e2a\u9879\u76ee\u7684\u201c\u4e2d\u6587\u5bfc\u8bfb\u201d\u3001\u201c\u63a8\u8350\u7406\u7531\u201d\u548c\u201c\u5feb\u901f\u89c2\u5bdf\u201d\uff0c\u518d\u51b3\u5b9a\u662f\u5426\u8fdb\u5165\u4ed3\u5e93\u6df1\u8bfb README\u3002</li>
-            <li>\u5982\u679c\u770b\u5230\u611f\u5174\u8da3\u7684\u9879\u76ee\uff0c\u5efa\u8bae\u987a\u624b\u6536\u85cf\u6216\u8bb0\u5f55\u5230\u4f60\u7684\u77e5\u8bc6\u5e93\uff0c\u65b9\u4fbf\u540e\u7eed\u8ddf\u8fdb\u3002</li>
-          </ul>
         </div>
 
         <div style="margin-top:18px;background:#ffffff;border:1px solid #d8dee4;border-radius:18px;padding:22px 24px;">
-          <h2 style="margin:0 0 14px;font-size:22px;color:#0f172a;">\u4e00\u3001\u6280\u672f\u521b\u65b0\u9879\u76ee Top 5</h2>
-          <p style="margin:0 0 16px;color:#57606a;line-height:1.8;">\u4f18\u5148\u5173\u6ce8\u8fd1\u671f\u70ed\u5ea6\u9ad8\u3001\u65b9\u5411\u660e\u786e\u3001\u6280\u672f\u5b9e\u73b0\u503c\u5f97\u8ddf\u8fdb\u7684\u4ed3\u5e93\uff0c\u9002\u5408\u7528\u4e8e\u9009\u9898\u3001\u7814\u7a76\u3001\u539f\u578b\u9a8c\u8bc1\u6216\u5de5\u7a0b\u53c2\u8003\u3002</p>
+          <h2 style="margin:0 0 14px;font-size:22px;color:#0f172a;">零、今日 9 个项目清单</h2>
+          <p style="margin:0 0 16px;color:#57606a;line-height:1.8;">先快速看项目名称和中文简介，确认哪些最值得点进去。</p>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">{summary_items}</table>
+        </div>
+
+        <div style="margin-top:18px;background:#ffffff;border:1px solid #d8dee4;border-radius:18px;padding:22px 24px;">
+          <h2 style="margin:0 0 14px;font-size:22px;color:#0f172a;">一、五个热点项目</h2>
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">{innovation_rows}</table>
         </div>
 
         <div style="margin-top:18px;background:#ffffff;border:1px solid #d8dee4;border-radius:18px;padding:22px 24px;">
-          <h2 style="margin:0 0 14px;font-size:22px;color:#0f172a;">\u4e8c\u3001\u6709\u8da3\u9879\u76ee Top 3</h2>
-          <p style="margin:0 0 16px;color:#57606a;line-height:1.8;">\u8fd9\u4e9b\u9879\u76ee\u66f4\u504f\u521b\u610f\u3001\u6548\u7387\u3001\u7ec8\u7aef\u73a9\u6cd5\u6216\u4ea4\u4e92\u4f53\u9a8c\uff0c\u9002\u5408\u5feb\u901f\u6253\u5f00\u770b\u770b\uff0c\u83b7\u5f97\u7075\u611f\u6216\u76f4\u63a5\u4e0a\u624b\u4f53\u9a8c\u3002</p>
+          <h2 style="margin:0 0 14px;font-size:22px;color:#0f172a;">二、两个有趣的项目</h2>
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">{fun_rows}</table>
         </div>
 
         <div style="margin-top:18px;background:#ffffff;border:1px solid #d8dee4;border-radius:18px;padding:22px 24px;">
-          <h2 style="margin:0 0 14px;font-size:20px;color:#0f172a;">\u4e09\u3001\u9605\u8bfb\u5efa\u8bae</h2>
-          <ul style="margin:0;padding-left:20px;line-height:1.9;color:#24292f;">
-            <li>\u5148\u770b\u4ed3\u5e93\u9996\u9875\u7684 README\u3001License\u3001\u6700\u8fd1 Commit\u3001Issue/PR \u6d3b\u8dc3\u5ea6\uff0c\u518d\u5224\u65ad\u662f\u5426\u503c\u5f97\u6301\u7eed\u8ddf\u8e2a\u3002</li>
-            <li>\u6280\u672f\u521b\u65b0\u7c7b\u4ed3\u5e93\u5efa\u8bae\u91cd\u70b9\u770b Demo\u3001\u67b6\u6784\u8bf4\u660e\u3001\u5b89\u88c5\u95e8\u69db\u3001\u4e8c\u6b21\u5f00\u53d1\u7a7a\u95f4\u4e0e\u793e\u533a\u54cd\u5e94\u901f\u5ea6\u3002</li>
-            <li>\u6709\u8da3\u9879\u76ee\u5efa\u8bae\u91cd\u70b9\u5173\u6ce8\u4ea4\u4e92\u4f53\u9a8c\u3001\u9002\u7528\u573a\u666f\u3001\u53ef\u6269\u5c55\u73a9\u6cd5\uff0c\u4ee5\u53ca\u662f\u5426\u9002\u5408\u6536\u85cf\u6216\u8f6c\u53d1\u3002</li>
-          </ul>
+          <h2 style="margin:0 0 14px;font-size:22px;color:#0f172a;">三、两个 AIGC 项目（生图 / 生视频 / AIGC）</h2>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">{aigc_rows}</table>
         </div>
       </div>
     </body>
     </html>
     """
     return subject, plain_text, html_text
-
 
 def require_env(name: str) -> str:
     value = os.getenv(name, "").strip()
@@ -961,17 +992,18 @@ def main(argv: list[str] | None = None) -> int:
     token = os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN") or None
     skip_api = args.skip_api or env_bool("SKIP_GITHUB_API", False)
 
-    innovation_candidates, fun_candidates = collect_candidates(report_days, token, skip_api=skip_api)
-    innovation, fun = select_reports(innovation_candidates, fun_candidates)
+    innovation_candidates, fun_candidates, aigc_candidates = collect_candidates(report_days, token, skip_api=skip_api)
+    innovation, fun, aigc = select_reports(innovation_candidates, fun_candidates, aigc_candidates)
 
-    if len(innovation) < 5 or len(fun) < 3:
-        print(f"WARN: expected 5 innovation and 3 fun projects, got {len(innovation)} and {len(fun)}.", file=sys.stderr)
+    if len(innovation) < 5 or len(fun) < 2 or len(aigc) < 2:
+        print(f"WARN: expected 5 hot, 2 fun, 2 AIGC projects, got {len(innovation)}, {len(fun)}, {len(aigc)}.", file=sys.stderr)
 
     source_text = "GitHub Trending" if skip_api else "GitHub Trending + GitHub Search API"
     repo_sections = {repo.full_name: "innovation" for repo in innovation}
     repo_sections.update({repo.full_name: "fun" for repo in fun})
-    repo_insights, ai_provider = generate_repo_insights(innovation + fun, repo_sections)
-    subject, plain_text, html_text = build_report(innovation, fun, report_days, source_text, repo_insights, ai_provider)
+    repo_sections.update({repo.full_name: "aigc" for repo in aigc})
+    repo_insights, ai_provider = generate_repo_insights(innovation + fun + aigc, repo_sections)
+    subject, plain_text, html_text = build_report(innovation, fun, aigc, report_days, source_text, repo_insights, ai_provider)
 
     if args.save_html:
         args.save_html.parent.mkdir(parents=True, exist_ok=True)

@@ -2,8 +2,9 @@
 
 on:
   schedule:
-    # 01:00 UTC = 09:00 Asia/Shanghai / Beijing time
-    - cron: '0 1 * * *'
+    # 00:20 UTC = 08:20 Asia/Shanghai / Beijing time
+    # GitHub Actions 的定时任务存在延迟风险，提前触发以减少晚发概率
+    - cron: '20 0 * * *'
   workflow_dispatch:
 
 permissions:
@@ -18,7 +19,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
       GITHUB_TOKEN: ${{ github.token }}
       MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
-      KIMI_MODEL: kimi-k2.6
+      KIMI_MODEL: kimi-k2.7-code
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
       SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
