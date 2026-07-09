@@ -20,6 +20,9 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
       KIMI_MODEL: kimi-k2.6
+      ANTDIGITAL_API_KEY: ${{ secrets.ANTDIGITAL_API_KEY }}
+      ANTDIGITAL_BASE_URL: https://maas-api.antdigital.com/v1
+      ANTDIGITAL_MODEL: qwen3.7-plus
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
       SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}

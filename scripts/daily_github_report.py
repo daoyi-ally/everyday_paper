@@ -40,6 +40,8 @@ DEFAULT_REPORT_DAYS = 7
 HTTP_TIMEOUT_SECONDS = 12
 HTTP_RETRIES = 2
 KIMI_CHAT_COMPLETIONS_URL = "https://api.moonshot.ai/v1/chat/completions"
+DEFAULT_ANTDIGITAL_BASE_URL = "https://maas-api.antdigital.com/v1"
+DEFAULT_ANTDIGITAL_MODEL = "qwen3.7-plus"
 DEFAULT_KIMI_PROMPT_CACHE_PREFIX = "github-daily-digest"
 DEFAULT_KIMI_MODEL = "kimi-k2.6"
 DEFAULT_KIMI_MAX_TOKENS = 4096
@@ -518,20 +520,25 @@ def repo_reason_text(repo: Repo, section: str, repo_insights: dict[str, RepoInsi
 
 def repo_intro_source(repo: Repo, repo_insights: dict[str, RepoInsight] | None = None) -> str:
     insight = (repo_insights or {}).get(repo.full_name)
-    return "Kimi 中文解读" if insight and insight.intro_zh else "规则兜底导读"
+    return "AI \u4e2d\u6587\u89e3\u8bfb" if insight and insight.intro_zh else "\u89c4\u5219\u515c\u5e95\u5bfc\u8bfb"
 
 
-def intro_source_summary(repos: list[Repo], repo_insights: dict[str, RepoInsight] | None = None) -> str:
+def intro_source_summary(
+    repos: list[Repo],
+    repo_insights: dict[str, RepoInsight] | None = None,
+    ai_provider: str = "",
+) -> str:
     total = len(repos)
-    kimi_count = sum(1 for repo in repos if repo_intro_source(repo, repo_insights) == "Kimi 中文解读")
-    fallback_count = max(total - kimi_count, 0)
+    ai_count = sum(1 for repo in repos if repo_intro_source(repo, repo_insights) == "AI \u4e2d\u6587\u89e3\u8bfb")
+    fallback_count = max(total - ai_count, 0)
     if total == 0:
-        return "本期没有入选项目"
-    if kimi_count == 0:
-        return f"本期未使用 Kimi，{fallback_count}/{total} 个项目使用规则兜底导读"
+        return "\u672c\u671f\u6ca1\u6709\u5165\u9009\u9879\u76ee"
+    if ai_count == 0:
+        return f"\u672c\u671f\u672a\u4f7f\u7528 AI \u6a21\u578b\uff0c{fallback_count}/{total} \u4e2a\u9879\u76ee\u4f7f\u7528\u89c4\u5219\u515c\u5e95\u5bfc\u8bfb"
+    provider_label = ai_provider or "AI \u6a21\u578b"
     if fallback_count == 0:
-        return f"本期已使用 Kimi 优化 {kimi_count}/{total} 个项目的中文理解"
-    return f"本期已使用 Kimi 优化 {kimi_count}/{total} 个项目的中文理解，其余 {fallback_count} 个使用规则兜底导读"
+        return f"\u672c\u671f\u5df2\u4f7f\u7528 {provider_label} \u4f18\u5316 {ai_count}/{total} \u4e2a\u9879\u76ee\u7684\u4e2d\u6587\u7406\u89e3"
+    return f"\u672c\u671f\u5df2\u4f7f\u7528 {provider_label} \u4f18\u5316 {ai_count}/{total} \u4e2a\u9879\u76ee\u7684\u4e2d\u6587\u7406\u89e3\uff0c\u5176\u4f59 {fallback_count} \u4e2a\u4f7f\u7528\u89c4\u5219\u515c\u5e95\u5bfc\u8bfb"
 
 def extract_json_object(text: str) -> str:
     start = text.find("{")
@@ -605,63 +612,16 @@ def build_kimi_repo_prompt(repos: list[Repo], repo_sections: dict[str, str]) -> 
         """
     ).strip()
 
-def generate_repo_insights(repos: list[Repo], repo_sections: dict[str, str]) -> tuple[dict[str, RepoInsight], str]:
-    api_key = os.getenv("MOONSHOT_API_KEY", "").strip()
-    if not api_key:
-        print("INFO: MOONSHOT_API_KEY not set; using fallback Chinese copy.", file=sys.stderr)
-        return {}, "Kimi \u672a\u914d\u7f6e API Key\uff08\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
-    model = os.getenv("KIMI_MODEL", DEFAULT_KIMI_MODEL).strip() or DEFAULT_KIMI_MODEL
-    max_tokens = int(os.getenv("KIMI_MAX_TOKENS") or str(DEFAULT_KIMI_MAX_TOKENS))
-    prompt = build_kimi_repo_prompt(repos, repo_sections)
-    body = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": "You are a concise Chinese tech newsletter editor. Only use the provided repository metadata. The first sentence must explain what the project does in plain Chinese, not its tech stack. Return one valid JSON object and nothing else.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        "max_tokens": max_tokens,
-    }
-    request = urllib.request.Request(
-        os.getenv("KIMI_CHAT_COMPLETIONS_URL", KIMI_CHAT_COMPLETIONS_URL).strip() or KIMI_CHAT_COMPLETIONS_URL,
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        details = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else str(exc)
-        details = normalize_text(details)[:240]
-        print(f"WARN: Kimi request failed ({exc.code}): {details}", file=sys.stderr)
-        return {}, f"Kimi \u8c03\u7528\u5931\u8d25\uff08HTTP {exc.code}\uff0c\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
-    except Exception as exc:
-        print(f"WARN: Kimi request failed: {exc}", file=sys.stderr)
-        return {}, f"Kimi \u8c03\u7528\u5931\u8d25\uff08{truncate(str(exc), 60)}\uff0c\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
-
+def parse_repo_insights_payload(payload: dict[str, Any], repos: list[Repo]) -> dict[str, RepoInsight]:
     choices = payload.get("choices") or []
     if not choices:
-        print("WARN: Kimi returned no choices; using fallback Chinese copy.", file=sys.stderr)
-        return {}, "Kimi \u8fd4\u56de\u7a7a\u7ed3\u679c\uff08\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
+        raise ValueError("no choices")
 
     raw_content = message_text((choices[0].get("message") or {}).get("content"))
     if not raw_content:
-        print("WARN: Kimi returned empty content; using fallback Chinese copy.", file=sys.stderr)
-        return {}, "Kimi \u8fd4\u56de\u7a7a\u5185\u5bb9\uff08\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
+        raise ValueError("empty content")
 
-    try:
-        parsed = json.loads(extract_json_object(raw_content))
-    except Exception as exc:
-        print(f"WARN: Kimi JSON parse failed: {exc}", file=sys.stderr)
-        return {}, "Kimi \u8fd4\u56de\u5185\u5bb9\u65e0\u6cd5\u89e3\u6790\uff08\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
-
+    parsed = json.loads(extract_json_object(raw_content))
     expected = {repo.full_name for repo in repos}
     insights: dict[str, RepoInsight] = {}
     for item in parsed.get("repos") or []:
@@ -679,13 +639,115 @@ def generate_repo_insights(repos: list[Repo], repo_sections: dict[str, str]) -> 
             intro_zh=truncate(intro_zh, 120),
             reason_zh=truncate(reason_zh, 90),
         )
+    return insights
+
+
+def request_openai_compatible_repo_insights(
+    *,
+    provider_label: str,
+    api_key: str,
+    url: str,
+    model: str,
+    prompt: str,
+    max_tokens: int,
+    repos: list[Repo],
+) -> tuple[dict[str, RepoInsight], str]:
+    body = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a concise Chinese tech newsletter editor. Only use the provided repository metadata. The first sentence must explain what the project does in plain Chinese, not its tech stack. Return one valid JSON object and nothing else.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": max_tokens,
+    }
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else str(exc)
+        details = normalize_text(details)[:240]
+        print(f"WARN: {provider_label} request failed ({exc.code}): {details}", file=sys.stderr)
+        return {}, f"{provider_label} \u8c03\u7528\u5931\u8d25\uff08HTTP {exc.code}\uff0c\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
+    except Exception as exc:
+        print(f"WARN: {provider_label} request failed: {exc}", file=sys.stderr)
+        return {}, f"{provider_label} \u8c03\u7528\u5931\u8d25\uff08{truncate(str(exc), 60)}\uff0c\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
+
+    try:
+        insights = parse_repo_insights_payload(payload, repos)
+    except Exception as exc:
+        print(f"WARN: {provider_label} payload parse failed: {exc}", file=sys.stderr)
+        return {}, f"{provider_label} \u8fd4\u56de\u5185\u5bb9\u65e0\u6cd5\u89e3\u6790\uff08\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
 
     if not insights:
-        print("WARN: Kimi returned no usable repo insights; using fallback Chinese copy.", file=sys.stderr)
-        return {}, "Kimi \u672a\u8fd4\u56de\u53ef\u7528\u7ed3\u679c\uff08\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
+        print(f"WARN: {provider_label} returned no usable repo insights; using fallback Chinese copy.", file=sys.stderr)
+        return {}, f"{provider_label} \u672a\u8fd4\u56de\u53ef\u7528\u7ed3\u679c\uff08\u5df2\u56de\u9000\u89c4\u5219\u5bfc\u8bfb\uff09"
 
-    print(f"INFO: Kimi generated Chinese insights for {len(insights)}/{len(repos)} repos.", file=sys.stderr)
-    return insights, f"Kimi\uff08{model}\uff09"
+    print(f"INFO: {provider_label} generated Chinese insights for {len(insights)}/{len(repos)} repos.", file=sys.stderr)
+    return insights, f"{provider_label}\uff08{model}\uff09"
+
+
+def generate_repo_insights(repos: list[Repo], repo_sections: dict[str, str]) -> tuple[dict[str, RepoInsight], str]:
+    max_tokens = int(os.getenv("KIMI_MAX_TOKENS") or str(DEFAULT_KIMI_MAX_TOKENS))
+    prompt = build_kimi_repo_prompt(repos, repo_sections)
+    statuses: list[str] = []
+
+    moonshot_key = os.getenv("MOONSHOT_API_KEY", "").strip()
+    moonshot_model = os.getenv("KIMI_MODEL", DEFAULT_KIMI_MODEL).strip() or DEFAULT_KIMI_MODEL
+    moonshot_url = os.getenv("KIMI_CHAT_COMPLETIONS_URL", KIMI_CHAT_COMPLETIONS_URL).strip() or KIMI_CHAT_COMPLETIONS_URL
+    if moonshot_key:
+        insights, status = request_openai_compatible_repo_insights(
+            provider_label="Kimi",
+            api_key=moonshot_key,
+            url=moonshot_url,
+            model=moonshot_model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            repos=repos,
+        )
+        if insights:
+            return insights, status
+        statuses.append(status)
+    else:
+        print("INFO: MOONSHOT_API_KEY not set; skipping Kimi.", file=sys.stderr)
+        statuses.append("Kimi \u672a\u914d\u7f6e API Key\uff08\u5df2\u8df3\u8fc7\uff09")
+
+    antdigital_key = os.getenv("ANTDIGITAL_API_KEY", "").strip()
+    antdigital_model = os.getenv("ANTDIGITAL_MODEL", DEFAULT_ANTDIGITAL_MODEL).strip() or DEFAULT_ANTDIGITAL_MODEL
+    antdigital_base_url = os.getenv("ANTDIGITAL_BASE_URL", DEFAULT_ANTDIGITAL_BASE_URL).strip() or DEFAULT_ANTDIGITAL_BASE_URL
+    antdigital_url = os.getenv("ANTDIGITAL_CHAT_COMPLETIONS_URL", "").strip() or f"{antdigital_base_url.rstrip('/')}/chat/completions"
+    if antdigital_key:
+        insights, status = request_openai_compatible_repo_insights(
+            provider_label="Ant Digital MaaS",
+            api_key=antdigital_key,
+            url=antdigital_url,
+            model=antdigital_model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            repos=repos,
+        )
+        if insights:
+            return insights, status
+        statuses.append(status)
+    else:
+        print("INFO: ANTDIGITAL_API_KEY not set; skipping Ant Digital MaaS.", file=sys.stderr)
+        statuses.append("Ant Digital MaaS \u672a\u914d\u7f6e API Key\uff08\u5df2\u8df3\u8fc7\uff09")
+
+    if all("\u672a\u914d\u7f6e API Key" in status for status in statuses):
+        return {}, "\u672a\u542f\u7528 AI\uff08Kimi \u4e0e Ant Digital MaaS \u5747\u672a\u914d\u7f6e\uff09"
+    return {}, "\uff1b".join(statuses)
 
 
 def section_meta(section: str) -> dict[str, str]:
@@ -912,7 +974,7 @@ def build_report(
 
     all_repos = innovation + fun + aigc
     ai_text = ai_provider or "未启用 AI（使用规则兜底导读）"
-    intro_source_text = intro_source_summary(all_repos, repo_insights)
+    intro_source_text = intro_source_summary(all_repos, repo_insights, ai_provider)
     summary_lines = [
         f"生成时间：{generated_at}（北京时间）",
         f"统计窗口：最近约 {report_days} 天",
